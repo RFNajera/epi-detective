@@ -357,11 +357,19 @@ const SCENE_PAINTERS = {
 // Map scene names to panel image filenames under media/panels/
 // The user will drop 8-bit artwork files into that folder to replace placeholders.
 const SCENE_PANELS = {
-  buffet:        'buffet_lunch.png',
-  lab:           'lab_report.png',
-  legionnaires:  'legionnaires_hotel.png',
-  measles:       'measles_school.png',
-  press:         'press_conference.png',
+  // Buffet / foodborne outbreak
+  buffet:                    'buffet_lunch.png',
+  lab:                       'lab_report.png',
+  press:                     'press_conference.png',
+  // Legionnaires' outbreak
+  legionnaires:              'legionnaires_hotel.png',
+  legionnaires_lab:          'legionnaires_lab_results.png',
+  legionnaires_interviews:   'legionnaires_interviews.png',
+  legionnaires_spatial:      'legionnaires_spatial.png',
+  legionnaires_cooling_tower:'legionnaires_cooling_tower.png',
+  legionnaires_press:        'legionnaires_press.png',
+  // Measles / VPD outbreak
+  measles:                   'measles_school.png',
 };
 
 function paintScene(name) {
@@ -1817,7 +1825,7 @@ const CASE_LEGIONNAIRES = [
   {
     speaker: 'LAB SCIENTIST',
     boxStyle: 'pixel-box-yellow',
-    scene: 'lab',
+    scene: 'legionnaires_lab',
     text: `Urinary antigen tests — our rapid diagnostic — came back POSITIVE for Legionella pneumophila serogroup 1 in 6 of 7 cases. The 7th has sputum cultures pending.\n\nDiagnosis confirmed. Now we need to find the environmental source.`,
     casefile: 'LAB: 6/7 positive Legionella urinary antigen. Serogroup 1 confirmed.',
   },
@@ -1853,7 +1861,7 @@ const CASE_LEGIONNAIRES = [
   {
     speaker: 'FIELD EPIDEMIOLOGIST',
     text: `We interviewed all 7 cases. We constructed an epidemic curve. Look at the onset dates and the building proximity data.`,
-    scene: 'legionnaires',
+    scene: 'legionnaires_interviews',
     tools: {
       type: 'epicurve',
       title: 'EPIDEMIC CURVE — LEGIONNAIRES\' CLUSTER (onset dates)',
@@ -1910,7 +1918,7 @@ const CASE_LEGIONNAIRES = [
     speaker: 'ENVIRONMENTAL HEALTH SPECIALIST',
     text: `Spatial analysis complete. All 7 cases spent time within 400 meters of the Grand Central Hotel in the 2-10 days before symptom onset. The hotel has a rooftop cooling tower last serviced 6 months ago.`,
     casefile: 'Geographic cluster: All cases within 400m of Grand Central Hotel. Cooling tower not serviced in 6 months.',
-    scene: 'legionnaires',
+    scene: 'legionnaires_spatial',
   },
   {
     speaker: 'MENTOR',
@@ -1944,8 +1952,9 @@ const CASE_LEGIONNAIRES = [
   {
     speaker: 'LAB SCIENTIST',
     boxStyle: 'pixel-box-yellow',
-    scene: 'lab',
+    scene: 'legionnaires_cooling_tower',
     text: `Cooling tower water sample results: POSITIVE for Legionella pneumophila, serogroup 1.\n\nConcentration: 48,000 CFU/mL\n\nMolecular typing (PFGE/WGS): Identical banding pattern to patient isolates. MATCH CONFIRMED.\n\nThis is your source.`,
+
     xp: 50,
     casefile: 'ENVIRONMENTAL MATCH: Cooling tower positive L. pneumophila sg1. 48,000 CFU/mL. WGS match to cases.',
   },
@@ -1987,8 +1996,9 @@ const CASE_LEGIONNAIRES = [
   {
     speaker: 'HEALTH DIRECTOR',
     boxStyle: 'pixel-box-cyan',
-    scene: 'press',
+    scene: 'legionnaires_press',
     text: `Excellent investigation, Detective. You correctly identified the source, guided the environmental sampling, understood the epidemiological study design, and helped implement control measures that stopped the outbreak.\n\nYour rank advancement is well-deserved. This is the work of a Senior Epi Detective.`,
+
     xp: 250,
     casefile: 'CASE 2 CLOSED: Cooling tower source confirmed via WGS. Remediation successful. 0 new cases.',
   },
