@@ -369,7 +369,15 @@ const SCENE_PANELS = {
   legionnaires_cooling_tower:'legionnaires_cooling_tower.png',
   legionnaires_press:        'legionnaires_press.png',
   // Measles / VPD outbreak
-  measles:                   'measles_school.png',
+  measles:                      'measles_school.png',
+  measles_nurse_records:        'measles_nurse_records.png',
+  measles_vaccine_efficacy:     'measles_vaccine_efficacy.png',
+  measles_facebook:             'measles_facebook.png',
+  measles_natural_vs_vaccine:   'measles_natural_vs_vaccine.png',
+  measles_outbreak_projection:  'measles_outbreak_projection.png',
+  measles_vaccine_clinic:       'measles_vaccine_clinic.png',
+  measles_pediatrician:         'measles_pediatrician.png',
+  measles_health_officer_close: 'measles_health_officer_close.png',
 };
 
 function paintScene(name) {
@@ -2048,7 +2056,7 @@ const CASE_MEASLES = [
   {
     speaker: 'SCHOOL NURSE',
     text: `We\'ve pulled the vaccination records. Of 340 students:\n• 245 fully vaccinated (2 doses MMR)\n• 48 unvaccinated (parental exemption)\n• 31 vaccinated with 1 dose\n• 16 unknown vaccination status\n\nThe 12 cases: 9 are unvaccinated, 2 are 1-dose recipients, 1 is unknown.`,
-    scene: 'measles',
+    scene: 'measles_nurse_records',
     casefile: 'Vaccination breakdown: 245 full (2-dose), 48 unvax, 31 single-dose, 16 unknown.',
     tools: {
       type: 'table',
@@ -2066,6 +2074,7 @@ const CASE_MEASLES = [
   {
     speaker: 'MENTOR',
     boxStyle: 'pixel-box',
+    scene: 'measles_vaccine_efficacy',
     text: `Look at the vaccine efficacy data. Calculate the vaccine efficacy (VE) for 2-dose MMR using the standard formula:\n\nVE = (ARu - ARv) / ARu × 100%\n\nWhere ARu = attack rate in unvaccinated, ARv = attack rate in vaccinated.`,
     keepTools: true,
     choices: [
@@ -2097,7 +2106,7 @@ const CASE_MEASLES = [
     speaker: 'COMMUNITY HEALTH WORKER',
     boxStyle: 'pixel-box',
     text: `We\'ve identified a community Facebook group with over 2,000 members sharing anti-vaccine content. Common claims include:\n\n• "MMR causes autism"\n• "Measles is just a rash — not dangerous"\n• "Natural immunity is better than vaccine immunity"\n• "The MMR contains toxins"\n\nParents are keeping unvaccinated kids home but refusing vaccination.`,
-    scene: 'measles',
+    scene: 'measles_facebook',
     casefile: 'Community misinformation: Facebook group, 2000 members. Autism claims, natural immunity myths.',
   },
   {
@@ -2137,6 +2146,7 @@ const CASE_MEASLES = [
   {
     speaker: 'MENTOR',
     boxStyle: 'pixel-box',
+    scene: 'measles_natural_vs_vaccine',
     text: `The parent raised "natural immunity." Let\'s address this accurately. How does natural measles immunity compare to vaccine-induced immunity?`,
     choices: [
       {
@@ -2217,10 +2227,11 @@ HIT = 1 - 1/15 = 93.3%`,
     speaker: 'EPIDEMIOLOGIST — MODELING TEAM',
     text: `Based on the Rₑ of 4.4, without intervention, our model projects 80-120 additional cases before the outbreak burns through the susceptible population.\n\nWith an emergency vaccination campaign targeting unvaccinated children and bringing coverage to 95%, Rₑ drops to 0.7 — below 1. The outbreak stops within 2 incubation periods.`,
     casefile: 'Projection without intervention: 80-120 more cases. With campaign to 95%: Rₑ=0.7, outbreak stops.',
-    scene: 'measles',
+    scene: 'measles_outbreak_projection',
   },
   {
     speaker: 'COMMUNITY LIAISON',
+    scene: 'measles_vaccine_clinic',
     text: `We\'ve set up a vaccine clinic at the school. 28 additional children vaccinated so far. But the Facebook group is actively discouraging parents from coming.\n\nCoverage has reached 89% — better, but still below the 93.3% threshold. What\'s our strategy?`,
     choices: [
       {
@@ -2250,15 +2261,17 @@ HIT = 1 - 1/15 = 93.3%`,
   {
     speaker: 'PEDIATRICIAN — DR. CHEN',
     boxStyle: 'pixel-box-yellow',
+    scene: 'measles_pediatrician',
     text: `We worked through the community using trusted messenger outreach. Coverage has now reached 94.5% — above the 93.3% herd immunity threshold for measles.\n\nLast confirmed case: 18 days ago. No new cases in the past 2 incubation periods. The outbreak is over.`,
     casefile: 'Vaccination coverage reached 94.5%. Last case 18 days ago. OUTBREAK TERMINATED.',
-    scene: 'measles',
   },
   {
     speaker: 'STATE HEALTH OFFICER',
     boxStyle: 'pixel-box-cyan',
+    scene: 'measles_health_officer_close',
     text: `Remarkable work, Detective. You successfully:\n\n• Calculated R₀, Rₑ, and herd immunity thresholds\n• Measured vaccine efficacy from outbreak data\n• Navigated vaccine hesitancy with evidence-based communication\n• Applied outbreak modeling to guide the vaccination campaign\n\nThis is the work of an Outbreak Specialist on their way to becoming a World-Class Disease Detective.`,
-    scene: 'press',
+    // Note: the press conference image for the measles case is measles_health_officer_close;
+    // the generic press scene key is still available for other use.
     xp: 400,
     casefile: 'CASE 3 CLOSED. Measles outbreak terminated. Community coverage 94.5%. All core competencies demonstrated.',
   },
