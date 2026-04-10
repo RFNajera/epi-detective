@@ -37,6 +37,8 @@ function getAudioCtx() {
   if (!STATE.audioCtx) {
     STATE.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
+  // Resume if browser suspended it
+  if (STATE.audioCtx.state === 'suspended') STATE.audioCtx.resume();
   return STATE.audioCtx;
 }
 
@@ -54,7 +56,7 @@ function playSFX(type) {
       correct: { freq: 660, type: 'square',   dur: 0.3,  vol: 0.2,  sweep: 880 },
       wrong:   { freq: 200, type: 'sawtooth', dur: 0.4,  vol: 0.2,  sweep: 100 },
       rankup:  { freq: 523, type: 'square',   dur: 0.8,  vol: 0.25, sweep: 1047 },
-      blip:    { freq: 330, type: 'square',   dur: 0.04, vol: 0.1 },
+      blip:    { freq: 330, type: 'square',   dur: 0.04, vol: 0.08 },
       fanfare: { freq: 784, type: 'square',   dur: 1.2,  vol: 0.2,  sweep: 1568 },
       xp:      { freq: 550, type: 'square',   dur: 0.15, vol: 0.12, sweep: 700 },
     };
@@ -70,40 +72,108 @@ function playSFX(type) {
   } catch(e) {}
 }
 
-// BG music: simple procedural chiptune
-let bgMusicInterval = null;
-const BG_NOTES = [261, 329, 392, 523, 392, 329, 261, 220, 261, 330, 392, 440];
-let bgNoteIdx = 0;
+/* ─── BG Music ────────────────────────────────────────────────────────────────
+   Procedural chiptune: three-phrase melody with variation so it never sounds
+   like a pure metronome. Uses a scheduler approach (Web Audio clock) instead
+   of setInterval so timing is sample-accurate and can be cleanly stopped.
+   STATE.muted is the single source of truth — startBGMusic() is only ever
+   called from startGame(); toggleMute() just sets STATE.muted and controls
+   the gainNode volume so no interval/timeout leak can restart music.
+──────────────────────────────────────────────────────────────────────────────*/
+
+// Melody phrases (frequencies in Hz). Three phrases picked in random order
+// with rests (0) and varying note lengths to avoid the metronome feel.
+const BG_PHRASES = [
+  // Phrase A — ascending question
+  [
+    [261,0.18],[294,0.18],[329,0.18],[0,0.09],[392,0.28],[349,0.18],[329,0.36],
+    [0,0.18],[261,0.18],[311,0.18],[349,0.18],[0,0.09],[392,0.36],[0,0.18],
+  ],
+  // Phrase B — answer/resolution
+  [
+    [523,0.28],[440,0.18],[392,0.18],[349,0.18],[0,0.09],[329,0.36],[0,0.18],
+    [294,0.18],[330,0.18],[370,0.18],[0,0.09],[392,0.28],[440,0.18],[392,0.36],[0,0.18],
+  ],
+  // Phrase C — tension / bridge
+  [
+    [392,0.18],[0,0.09],[415,0.18],[0,0.09],[440,0.28],[0,0.09],
+    [466,0.18],[440,0.18],[415,0.18],[0,0.18],[392,0.28],[349,0.18],
+    [329,0.18],[294,0.18],[261,0.36],[0,0.28],
+  ],
+];
+
+let bgMusicNode  = null;   // master gain — exists while music is running
+let bgMusicStop  = false;  // flag to cancel the async scheduler
+let bgPhraseIdx  = 0;
+
+function _buildPhraseOrder() {
+  // Play A then randomly choose B or C, then the remaining one — so A always
+  // anchors but B/C are shuffled to add variety.
+  const tail = Math.random() < 0.5 ? [1, 2] : [2, 1];
+  return [0, ...tail];
+}
+
+async function _schedulePhrases(masterGain, ctx) {
+  let order = _buildPhraseOrder();
+  let phrasePos = 0;
+
+  while (!bgMusicStop) {
+    const phrase = BG_PHRASES[order[phrasePos % order.length]];
+    phrasePos++;
+    if (phrasePos % order.length === 0) order = _buildPhraseOrder(); // reshuffle each cycle
+
+    let t = ctx.currentTime + 0.05;
+    for (const [freq, dur] of phrase) {
+      if (bgMusicStop) break;
+      if (freq > 0) {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(masterGain);
+        osc.type = 'square';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.035, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.85);
+        osc.start(t);
+        osc.stop(t + dur);
+      }
+      t += dur;
+    }
+
+    // Wait until the phrase finishes before scheduling next one
+    const phraseLen = phrase.reduce((s,[,d]) => s + d, 0);
+    const waitMs = Math.max(0, (t - ctx.currentTime) * 1000 - 100);
+    await new Promise(res => setTimeout(res, waitMs));
+  }
+}
 
 function startBGMusic() {
-  if (STATE.muted || bgMusicInterval) return;
-  bgMusicInterval = setInterval(() => {
-    if (STATE.muted) return;
-    try {
-      const ctx = getAudioCtx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = 'square';
-      osc.frequency.value = BG_NOTES[bgNoteIdx % BG_NOTES.length];
-      gain.gain.setValueAtTime(0.04, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.2);
-      bgNoteIdx++;
-    } catch(e) {}
-  }, 220);
+  if (STATE.muted || bgMusicNode) return;  // already playing or user muted
+  try {
+    const ctx = getAudioCtx();
+    bgMusicStop = false;
+    bgMusicNode = ctx.createGain();
+    bgMusicNode.gain.value = 1;
+    bgMusicNode.connect(ctx.destination);
+    _schedulePhrases(bgMusicNode, ctx);
+  } catch(e) {}
+}
+
+function stopBGMusic() {
+  bgMusicStop = true;
+  if (bgMusicNode) {
+    try { bgMusicNode.disconnect(); } catch(e) {}
+    bgMusicNode = null;
+  }
 }
 
 function toggleMute() {
   STATE.muted = !STATE.muted;
   document.getElementById('mute-btn').textContent = STATE.muted ? '✕ SOUND OFF' : '♪ SOUND ON';
-  if (STATE.muted && bgMusicInterval) {
-    clearInterval(bgMusicInterval);
-    bgMusicInterval = null;
-  } else if (!STATE.muted) {
-    startBGMusic();
+  if (STATE.muted) {
+    stopBGMusic();   // hard stop — will not restart unless user toggles back
+  } else {
+    startBGMusic();  // only restarts on explicit user action
   }
 }
 
@@ -216,9 +286,44 @@ function renderCasefile() {
   STATE.casefileEntries.forEach(e => {
     const div = document.createElement('div');
     div.className = 'casefile-entry' + (e.isNew ? ' new' : '');
-    div.textContent = '▸ ' + e.text;
+    div.textContent = '\u25b8 ' + e.text;
     container.appendChild(div);
   });
+}
+
+function downloadNotebook() {
+  const caseNames = { buffet: 'Case 1 — The Banquet Incident', legionnaires: 'Case 2 — City Center Cluster', measles: 'Case 3 — The Vaccine Hesitancy Crisis' };
+  const caseName = caseNames[STATE.currentCase] || 'Investigation';
+  const dateStr = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
+
+  const lines = [
+    '========================================',
+    '  EPI DETECTIVE — INVESTIGATION NOTEBOOK',
+    '========================================',
+    '',
+    `CASE: ${caseName}`,
+    `DATE PRINTED: ${dateStr}`,
+    `RANK: ${(window.RANKS && RANKS[STATE.rank]) ? RANKS[STATE.rank].name : 'Rookie'}`,
+    `SCORE: ${STATE.score} XP`,
+    '',
+    '----------------------------------------',
+    '  FIELD NOTES',
+    '----------------------------------------',
+    '',
+    ...STATE.casefileEntries.map((e, i) => `[${String(i+1).padStart(2,'0')}] ${e.text}`),
+    '',
+    '----------------------------------------',
+    '  END OF NOTEBOOK',
+    '----------------------------------------',
+  ];
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `epi-detective-notebook-${STATE.currentCase || 'notes'}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── XP & RANK ──────────────────────────────────
@@ -249,12 +354,36 @@ const SCENE_PAINTERS = {
   press: paintScenePress,
 };
 
+// Map scene names to panel image filenames under media/panels/
+// The user will drop 8-bit artwork files into that folder to replace placeholders.
+const SCENE_PANELS = {
+  buffet:        'buffet_lunch.png',
+  lab:           'lab_report.png',
+  legionnaires:  'legionnaires_hotel.png',
+  measles:       'measles_school.png',
+  press:         'press_conference.png',
+};
+
 function paintScene(name) {
   const canvas = document.getElementById('scene-canvas');
+  const panel  = document.getElementById('scene-panel');
   if (!canvas) return;
   canvas.width = canvas.offsetWidth || 860;
+
+  // Always paint the procedural canvas art as a fallback
   const fn = SCENE_PAINTERS[name] || SCENE_PAINTERS.lab;
   fn(canvas);
+
+  // Attempt to show the 8-bit panel image if one is available
+  if (panel && SCENE_PANELS[name]) {
+    const src = 'media/panels/' + SCENE_PANELS[name];
+    panel.onload  = () => { panel.style.display = 'block'; };
+    panel.onerror = () => { panel.style.display = 'none';  }; // fallback to canvas
+    if (panel.src !== src) panel.src = src;
+    // If src unchanged (same scene repaint), respect current display state
+  } else if (panel) {
+    panel.style.display = 'none';
+  }
 }
 
 function pixelRect(ctx, x, y, w, h, color) {
