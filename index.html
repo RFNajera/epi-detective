@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="description" content="An 8-bit retro-style RPG where the player works through an epidemic.">
-
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://coding.epidemiological.net/epi-detective/">
 <meta property="og:title" content="Epi Detective v1.0">
@@ -18,14 +17,14 @@
 <title>EPI DETECTIVE — Disease Investigation RPG</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div id="game-shell">
 
   <!-- HUD BAR -->
   <div id="hud" class="pixel-box">
-    <div id="hud-logo">EPI DETECTIVE v1.0</div>
+    <div id="hud-logo">EPI DETECTIVE v1.01</div>
     <div id="hud-right">
       <div class="hud-stat">
         <span class="hud-stat-label">RANK</span>
@@ -62,7 +61,7 @@
       </div>
       <div class="title-press-start blink">▶ PRESS ENTER OR CLICK TO START</div>
       <div class="title-credits">
-        v1.0 · Graduate Epidemiology Training Edition<br>
+        v1.01 · Graduate Epidemiology Training Edition<br>
         Master epi curves · odds ratios · attack rates · outbreak investigation
       </div>
     </div>
@@ -112,12 +111,21 @@
     <!-- GAME SCENE: art + dialog + choices -->
     <div id="game-scene" style="display:none; flex-direction:column; gap:8px;">
 
-      <!-- Scene art canvas -->
-      <canvas id="scene-canvas" height="160" class="pixel-box" style="width:100%; display:block;"></canvas>
+      <!-- Scene art: pixel-drawn canvas fallback + optional 8-bit panel image overlay -->
+      <div id="scene-wrap" style="position:relative; width:100%;">
+        <canvas id="scene-canvas" height="160" class="pixel-box" style="width:100%; display:block;"></canvas>
+        <img id="scene-panel"
+             src=""
+             alt=""
+             style="display:none; position:absolute; top:0; left:0; width:100%; height:160px; object-fit:cover; image-rendering:pixelated; border:2px solid var(--border);">
+      </div>
 
       <!-- Casefile / notebook -->
       <div id="casefile-panel" class="pixel-box">
-        <h3>📋 INVESTIGATION NOTES</h3>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <h3 style="margin:0;">📋 INVESTIGATION NOTES</h3>
+          <button class="dl-btn" onclick="downloadNotebook()" title="Download notebook as .txt">⬇ SAVE NOTES</button>
+        </div>
         <div id="casefile-entries"></div>
       </div>
 
@@ -190,7 +198,7 @@
 
 </div><!-- end game-shell -->
 
-<script src="js/game.js"></script>
+<script src="game.js"></script>
 <script data-pplx-inline-edit>
 (function(){
   if(window===window.top)return;
