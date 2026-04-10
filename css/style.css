@@ -713,3 +713,20 @@ body::after {
   animation: cursor-blink 0.7s steps(1) infinite;
   padding-right: 2px;
 }
+
+/* ── Download button ───────────────────────────── */
+.dl-btn {
+  font-family: var(--font-pixel);
+  font-size: 7px;
+  color: var(--cyan);
+  background: transparent;
+  border: 1px solid var(--cyan);
+  padding: 3px 7px;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  transition: background 0.15s, color 0.15s;
+}
+.dl-btn:hover {
+  background: var(--cyan);
+  color: var(--bg);
+}
