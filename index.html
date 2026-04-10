@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EPI DETECTIVE — Disease Investigation RPG</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game-shell">
+
+  <!-- HUD BAR -->
+  <div id="hud" class="pixel-box">
+    <div id="hud-logo">EPI DETECTIVE v1.0</div>
+    <div id="hud-right">
+      <div class="hud-stat">
+        <span class="hud-stat-label">RANK</span>
+        <span class="hud-stat-value rank" id="hud-rank">ROOKIE</span>
+      </div>
+      <div class="hud-stat">
+        <span class="hud-stat-label">SOLVED</span>
+        <span class="hud-stat-value" id="hud-cases">0/3</span>
+      </div>
+      <div class="hud-stat">
+        <span class="hud-stat-label">SCORE</span>
+        <span class="hud-stat-value" id="hud-score">0</span>
+      </div>
+      <div id="xp-bar-wrap">
+        <span id="xp-bar-label">XP TO NEXT RANK</span>
+        <div id="xp-bar"><div id="xp-fill"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN VIEWPORT -->
+  <div id="viewport">
+
+    <!-- TITLE SCREEN -->
+    <div id="title-screen" class="pixel-box">
+      <canvas id="star-canvas" width="860" height="160" style="position:absolute;top:0;left:0;opacity:0.6;"></canvas>
+      <div class="title-logo animate-fadein">
+        <div class="title-main">🔬 EPI DETECTIVE</div>
+        <div class="title-sub">DISEASE INVESTIGATION RPG</div>
+      </div>
+      <div class="title-tagline animate-fadein">
+        From rookie disease investigator to world-class disease detective —<br>
+        solve outbreaks, master epidemiology, save lives.
+      </div>
+      <div class="title-press-start blink">▶ PRESS ENTER OR CLICK TO START</div>
+      <div class="title-credits">
+        v1.0 · Graduate Epidemiology Training Edition<br>
+        Master epi curves · odds ratios · attack rates · outbreak investigation
+      </div>
+    </div>
+
+    <!-- OUTBREAK SELECT SCREEN -->
+    <div id="outbreak-select" class="pixel-box">
+      <div style="font-size:9px; color:var(--cyan); text-align:center; margin-bottom:4px;">SELECT OUTBREAK TO INVESTIGATE</div>
+      <div style="font-size:7px; color:var(--text-faint); text-align:center; margin-bottom:12px; font-family:var(--font-mono)">Complete cases to unlock new outbreaks and advance your rank</div>
+
+      <button class="outbreak-card unlocked" id="case-buffet" onclick="startCase('buffet')">
+        <div>
+          <div class="outbreak-difficulty diff-easy">EASY</div>
+        </div>
+        <div class="outbreak-info">
+          <div class="outbreak-name">CASE 1: THE BANQUET INCIDENT</div>
+          <div class="outbreak-desc">34 attendees of a corporate buffet lunch report sudden-onset diarrhea. Identify the source food, calculate attack rates, and stop the outbreak.</div>
+          <div class="outbreak-xp">+150 XP · Skills: Attack Rate, 2×2 Tables, Food-borne Illness</div>
+        </div>
+        <div id="case-buffet-status" style="font-size:7px; color:var(--green);">OPEN</div>
+      </button>
+
+      <button class="outbreak-card locked" id="case-legionnaires" onclick="startCase('legionnaires')">
+        <div>
+          <div class="outbreak-difficulty diff-medium">MEDIUM</div>
+        </div>
+        <div class="outbreak-info">
+          <div class="outbreak-name">CASE 2: CITY CENTER CLUSTER</div>
+          <div class="outbreak-desc">A cluster of severe pneumonia cases appears in a downtown hotel. Long incubation periods and an environmental source make this investigation complex.</div>
+          <div class="outbreak-xp">+250 XP · Skills: Epi Curve, Incubation Period, Environmental Investigation</div>
+        </div>
+        <div id="case-legionnaires-status" style="font-size:7px; color:var(--text-faint);">🔒 LOCKED</div>
+      </button>
+
+      <button class="outbreak-card locked" id="case-measles" onclick="startCase('measles')">
+        <div>
+          <div class="outbreak-difficulty diff-hard">HARD</div>
+        </div>
+        <div class="outbreak-info">
+          <div class="outbreak-name">CASE 3: THE VACCINE HESITANCY CRISIS</div>
+          <div class="outbreak-desc">Measles spreads through a school with low vaccination coverage. Contend with vaccine-hesitant parents, social media misinformation, and a shrinking herd immunity threshold.</div>
+          <div class="outbreak-xp">+400 XP · Skills: R₀, Herd Immunity, Risk Communication, Vaccine Efficacy</div>
+        </div>
+        <div id="case-measles-status" style="font-size:7px; color:var(--text-faint);">🔒 LOCKED</div>
+      </button>
+    </div>
+
+    <!-- GAME SCENE: art + dialog + choices -->
+    <div id="game-scene" style="display:none; flex-direction:column; gap:8px;">
+
+      <!-- Scene art canvas -->
+      <canvas id="scene-canvas" height="160" class="pixel-box" style="width:100%; display:block;"></canvas>
+
+      <!-- Casefile / notebook -->
+      <div id="casefile-panel" class="pixel-box">
+        <h3>📋 INVESTIGATION NOTES</h3>
+        <div id="casefile-entries"></div>
+      </div>
+
+      <!-- Field Reference (handbook) panel -->
+      <div id="fieldref-panel" class="pixel-box" style="display:none; border-color:#7755cc; box-shadow:0 0 12px rgba(119,85,204,0.25),4px 4px 0 4px rgba(0,0,0,0.8);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="font-family:var(--font-pixel);font-size:8px;color:#bb99ff;text-shadow:0 0 8px #7755cc;">📖 CCDM FIELD REFERENCE</div>
+          <div style="font-family:var(--font-pixel);font-size:6px;color:var(--text-faint);">Control of Communicable Diseases Manual — [R] to close</div>
+        </div>
+        <div id="fieldref-content"></div>
+      </div>
+
+      <!-- Epi tools panel -->
+      <div id="tools-panel" class="pixel-box pixel-box-cyan">
+        <div id="tools-panel-title">EPIDEMIOLOGICAL DATA</div>
+        <div id="tools-content"></div>
+      </div>
+
+      <!-- Feedback after answer -->
+      <div id="feedback-panel" class="pixel-box">
+        <div id="feedback-text"></div>
+      </div>
+
+      <!-- Main text box -->
+      <div id="text-box" class="pixel-box pixel-box-green">
+        <div id="speaker-name"></div>
+        <div id="dialog-text"></div>
+        <div id="continue-prompt" class="blink" style="display:none;">▼ PRESS ENTER OR SPACE</div>
+      </div>
+
+      <!-- Choices panel -->
+      <div id="choices-panel"></div>
+
+    </div>
+
+    <!-- RANK UP SCREEN -->
+    <div id="rankup-screen" class="pixel-box pixel-box-magenta" style="display:none;">
+      <div style="font-size:11px; color:var(--magenta); text-shadow:0 0 12px var(--magenta);">★ RANK UP! ★</div>
+      <div class="rankup-title" id="rankup-title"></div>
+      <div class="rankup-rank" id="rankup-rank"></div>
+      <div id="rankup-msg" style="font-family:var(--font-mono); font-size:13px; color:var(--text-dim); max-width:500px; line-height:1.6;"></div>
+      <button class="choice-btn" id="rankup-continue-btn" style="margin-top:8px; align-self:center; pointer-events:auto; position:relative; z-index:10;">
+        <span class="choice-key">↩</span> CONTINUE TO CASE SELECT
+      </button>
+    </div>
+
+    <!-- GAME OVER / VICTORY -->
+    <div id="victory-screen" style="display:none; flex-direction:column; align-items:center; gap:16px; padding:32px; text-align:center;">
+      <div style="font-size:14px; color:var(--magenta); text-shadow:0 0 16px var(--magenta);">🏆 WORLD-CLASS DISEASE DETECTIVE</div>
+      <div id="victory-text" style="font-family:var(--font-mono); font-size:14px; color:var(--text-dim); max-width:560px; line-height:1.7;"></div>
+      <div id="final-score" style="font-size:10px; color:var(--yellow);"></div>
+      <button class="choice-btn pixel-box-yellow" id="victory-restart-btn" style="margin-top:8px; pointer-events:auto; position:relative; z-index:10;">
+        <span class="choice-key">↩</span> PLAY AGAIN
+      </button>
+    </div>
+
+  </div><!-- end viewport -->
+
+  <!-- ACTION BAR -->
+  <div id="action-bar" class="pixel-box">
+    <div id="key-hints">
+      <div class="key-hint"><span class="key-badge">ENTER</span> Continue</div>
+      <div class="key-hint"><span class="key-badge">1-4</span> Select answer</div>
+      <div class="key-hint"><span class="key-badge">N</span> Notes</div>
+      <div class="key-hint"><span class="key-badge">R</span> Field Ref</div>
+      <div class="key-hint"><span class="key-badge">D</span> Data</div>
+    </div>
+    <button id="mute-btn" onclick="toggleMute()">♪ SOUND ON</button>
+  </div>
+
+</div><!-- end game-shell -->
+
+<script src="game.js"></script>
+<script data-pplx-inline-edit>
+(function(){
+  if(window===window.top)return;
+  function inlineAll(orig,clone){
+    if(orig.nodeType!==1)return;
+    try{
+      var cs=getComputedStyle(orig);
+      var t='';
+      for(var i=0;i<cs.length;i++){t+=cs[i]+':'+cs.getPropertyValue(cs[i])+';';}
+      clone.style.cssText=t;
+    }catch(e){}
+    var oc=orig.children,cc=clone.children;
+    for(var j=0;j<oc.length&&j<cc.length;j++){inlineAll(oc[j],cc[j]);}
+  }
+  function stripExternal(clone){
+    var imgs=clone.querySelectorAll('img');
+    for(var i=0;i<imgs.length;i++){
+      var s=imgs[i].getAttribute('src');
+      if(s&&!s.startsWith('data:'))imgs[i].removeAttribute('src');
+    }
+    var all=clone.querySelectorAll('*');
+    for(var i=0;i<all.length;i++){
+      var st=all[i].style.cssText;
+      if(st&&st.indexOf('url(')>=0){
+        all[i].style.cssText=st.replace(/url\(["']?(?!data:)[^)"']*["']?\)/gi,'none');
+      }
+    }
+  }
+  window.addEventListener('message',function(e){
+    if(!e.data||e.data.type!=='INLINE_EDIT_CAPTURE_REQUEST')return;
+    var scrollX=window.scrollX||window.pageXOffset||0;
+    var scrollY=window.scrollY||window.pageYOffset||0;
+    var w=window.innerWidth,h=window.innerHeight;
+    try{
+      var clone=document.documentElement.cloneNode(true);
+      var rm=clone.querySelectorAll('script,link[rel="stylesheet"],style');
+      for(var i=0;i<rm.length;i++){rm[i].remove();}
+      inlineAll(document.documentElement,clone);
+      stripExternal(clone);
+      var html=new XMLSerializer().serializeToString(clone);
+      var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'">'
+        +'<foreignObject width="100%" height="100%">'
+        +'<div xmlns="http://www.w3.org/1999/xhtml" style="width:'+w+'px;height:'+h+'px;overflow:hidden">'
+        +'<div style="transform:translate(-'+scrollX+'px,-'+scrollY+'px);transform-origin:top left">'
+        +html+'</div></div></foreignObject></svg>';
+      var svgUrl='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
+      var img=new Image();
+      img.onload=function(){
+        var c=document.createElement('canvas');c.width=w;c.height=h;
+        c.getContext('2d').drawImage(img,0,0);
+        window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:c.toDataURL('image/png'),scrollX:scrollX,scrollY:scrollY},'*');
+      };
+      img.onerror=function(){
+        window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:null,scrollX:scrollX,scrollY:scrollY},'*');
+      };
+      img.src=svgUrl;
+    }catch(err){
+      window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:null,scrollX:scrollX,scrollY:scrollY},'*');
+    }
+  });
+})();
+</script></body>
+</html>
