@@ -6,12 +6,12 @@
 <meta name="description" content="An 8-bit retro-style RPG where the player works through an epidemic.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://coding.epidemiological.net/epi-detective/">
-<meta property="og:title" content="Epi Detective v1.02">
+<meta property="og:title" content="Epi Detective v1.1">
 <meta property="og:description" content="An 8-bit retro-style RPG where the player works through an epidemic.">
 <meta property="og:image" content="https://coding.epidemiological.net/epi-detective/media/social_share.jpg">
-<meta property="og:image:alt" content="Cover image for Epi Detective v1.02, an 8-bit retro-style RPG about working through an epidemic.">
+<meta property="og:image:alt" content="Cover image for Epi Detective v1.1, an 8-bit retro-style RPG about working through an epidemic.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Epi Detective v1.02">
+<meta name="twitter:title" content="Epi Detective v1.1">
 <meta name="twitter:description" content="An 8-bit retro-style RPG where the player works through an epidemic.">
 <meta name="twitter:image" content="https://coding.epidemiological.net/epi-detective/media/social_share.jpg">
 <title>EPI DETECTIVE — Disease Investigation RPG</title>
@@ -24,7 +24,7 @@
 
   <!-- HUD BAR -->
   <div id="hud" class="pixel-box">
-    <div id="hud-logo">EPI DETECTIVE v1.02</div>
+    <div id="hud-logo">EPI DETECTIVE v1.1</div>
     <div id="hud-right">
       <div class="hud-stat">
         <span class="hud-stat-label">RANK</span>
@@ -61,7 +61,7 @@
       </div>
       <div class="title-press-start blink">▶ PRESS ENTER OR CLICK TO START</div>
       <div class="title-credits">
-        v1.02 · Graduate Epidemiology Training Edition<br>
+        v1.1 · Graduate Epidemiology Training Edition<br>
         Master epi curves · odds ratios · attack rates · outbreak investigation
       </div>
     </div>
@@ -199,6 +199,34 @@
 </div><!-- end game-shell -->
 
 <script src="js/game.js"></script>
+
+<!-- Mobile warning overlay -->
+<div id="mobile-warning" style="display:none;">
+  <div id="mobile-warning-box">
+    <div id="mobile-warning-icon">🖥️</div>
+    <div id="mobile-warning-title">DESKTOP ONLY</div>
+    <div id="mobile-warning-sub">EPI DETECTIVE</div>
+    <p id="mobile-warning-msg">
+      This game requires a keyboard and a desktop browser.<br><br>
+      Please open it on a laptop or desktop computer
+      for the full experience.
+    </p>
+    <div id="mobile-warning-hint">Designed for Chrome, Firefox, Edge &amp; Safari on desktop</div>
+  </div>
+</div>
+
+<script>
+(function() {
+  function isMobile() {
+    return window.matchMedia('(max-width: 900px), (pointer: coarse)').matches;
+  }
+  function check() {
+    document.getElementById('mobile-warning').style.display = isMobile() ? 'flex' : 'none';
+  }
+  check();
+  window.addEventListener('resize', check);
+})();
+</script>
 <script data-pplx-inline-edit>
 (function(){
   if(window===window.top)return;
