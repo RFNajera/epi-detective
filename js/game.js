@@ -1,43 +1,39 @@
-/* =============================================
-   EPI DETECTIVE — GAME ENGINE
-   ============================================= */
+/* ============================================================
+   EPI DETECTIVE v1.5 — GAME ENGINE
+   ============================================================ */
 
-// ── STATE ──────────────────────────────────────
+'use strict';
+
+/* ── STATE ─────────────────────────────────────────────────── */
 const STATE = {
-  screen: 'title',   // 'title' | 'select' | 'game' | 'rankup' | 'victory'
+  screen: 'select',          // skip title — go straight to select
   currentCase: null,
   nodeIndex: 0,
-  score: 0,
-  xp: 0,
-  xpToRank: 150,
+  score: 0, xp: 0, xpToRank: 150,
   casesCompleted: [],
   rank: 0,
   muted: false,
-  typing: false,
-  typewriterTimer: null,
-  fullText: '',
-  casefileEntries: [],
+  casefileText: '',
+  casefileUserVisible: false,
+  toolsUserHidden: false,
+  pendingFeedbackNext: null,
   audioCtx: null,
-  // Track user-toggled panel visibility so advancing nodes doesn't override their choice
-  casefileUserVisible: false,   // only show when user pressed N, or a new entry arrives
-  toolsUserHidden: false,       // true when user pressed D to hide; cleared when a new tool set loads
-  pendingFeedbackNext: null,    // set when waiting for player to dismiss feedback
 };
 
+/* ── RANKS ─────────────────────────────────────────────────── */
 const RANKS = [
-  { name: 'ROOKIE INVESTIGATOR',    color: '#aaaaaa', xpNeeded: 0   },
-  { name: 'FIELD EPIDEMIOLOGIST',   color: '#39ff14', xpNeeded: 150 },
-  { name: 'SENIOR EPI DETECTIVE',   color: '#00e5ff', xpNeeded: 400 },
-  { name: 'OUTBREAK SPECIALIST',    color: '#ffe600', xpNeeded: 700 },
-  { name: 'WORLD-CLASS DETECTIVE',  color: '#ff00ff', xpNeeded: 1100},
+  { name: 'ROOKIE',                        xp: 0,    msg: 'You\'ve taken your first steps into the field. Cases await.' },
+  { name: 'FIELD EPIDEMIOLOGIST',          xp: 300,  msg: 'You can read an epi curve, calculate attack rates, and identify a point-source outbreak. Solid start.' },
+  { name: 'SENIOR EPI DETECTIVE',          xp: 700,  msg: 'Toxicology, foodborne botulism, environmental sampling — you\'re handling complex cases with confidence.' },
+  { name: 'OUTBREAK SPECIALIST',           xp: 1150, msg: 'Legionella, molecular typing, case-control design — you\'re thinking like a seasoned investigator.' },
+  { name: 'WORLD-CLASS DISEASE DETECTIVE', xp: 1700, msg: 'Vaccine efficacy, R₀, herd immunity, risk communication — the complete package. The community is safer with you on the case.' },
 ];
 
-// ── AUDIO ENGINE ───────────────────────────────
+/* ── AUDIO ─────────────────────────────────────────────────── */
 function getAudioCtx() {
   if (!STATE.audioCtx) {
     STATE.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
-  // Resume if browser suspended it
   if (STATE.audioCtx.state === 'suspended') STATE.audioCtx.resume();
   return STATE.audioCtx;
 }
@@ -46,21 +42,18 @@ function playSFX(type) {
   if (STATE.muted) return;
   try {
     const ctx = getAudioCtx();
-    const osc = ctx.createOscillator();
+    const osc  = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
-
     const patterns = {
-      click:   { freq: 440, type: 'square',   dur: 0.05, vol: 0.15 },
-      correct: { freq: 660, type: 'square',   dur: 0.3,  vol: 0.2,  sweep: 880 },
-      wrong:   { freq: 200, type: 'sawtooth', dur: 0.4,  vol: 0.2,  sweep: 100 },
-      rankup:  { freq: 523, type: 'square',   dur: 0.8,  vol: 0.25, sweep: 1047 },
-      blip:    { freq: 330, type: 'square',   dur: 0.04, vol: 0.08 },
-      fanfare: { freq: 784, type: 'square',   dur: 1.2,  vol: 0.2,  sweep: 1568 },
-      xp:      { freq: 550, type: 'square',   dur: 0.15, vol: 0.12, sweep: 700 },
+      click:   { freq: 440, type: 'square',   dur: 0.05, vol: 0.12 },
+      correct: { freq: 660, type: 'square',   dur: 0.3,  vol: 0.18, sweep: 880 },
+      wrong:   { freq: 200, type: 'sawtooth', dur: 0.4,  vol: 0.15, sweep: 100 },
+      rankup:  { freq: 523, type: 'square',   dur: 0.8,  vol: 0.2,  sweep: 1047 },
+      blip:    { freq: 330, type: 'square',   dur: 0.03, vol: 0.07 },
+      xp:      { freq: 550, type: 'square',   dur: 0.15, vol: 0.1,  sweep: 700 },
     };
-
     const p = patterns[type] || patterns.blip;
     osc.type = p.type;
     osc.frequency.setValueAtTime(p.freq, ctx.currentTime);
@@ -72,1200 +65,738 @@ function playSFX(type) {
   } catch(e) {}
 }
 
-/* ─── BG Music ────────────────────────────────────────────────────────────────
-   Procedural chiptune: three-phrase melody with variation so it never sounds
-   like a pure metronome. Uses a scheduler approach (Web Audio clock) instead
-   of setInterval so timing is sample-accurate and can be cleanly stopped.
-   STATE.muted is the single source of truth — startBGMusic() is only ever
-   called from startGame(); toggleMute() just sets STATE.muted and controls
-   the gainNode volume so no interval/timeout leak can restart music.
-──────────────────────────────────────────────────────────────────────────────*/
-
-// Melody phrases (frequencies in Hz). Three phrases picked in random order
-// with rests (0) and varying note lengths to avoid the metronome feel.
-const BG_PHRASES = [
-  // Phrase A — ascending question
-  [
-    [261,0.18],[294,0.18],[329,0.18],[0,0.09],[392,0.28],[349,0.18],[329,0.36],
-    [0,0.18],[261,0.18],[311,0.18],[349,0.18],[0,0.09],[392,0.36],[0,0.18],
-  ],
-  // Phrase B — answer/resolution
-  [
-    [523,0.28],[440,0.18],[392,0.18],[349,0.18],[0,0.09],[329,0.36],[0,0.18],
-    [294,0.18],[330,0.18],[370,0.18],[0,0.09],[392,0.28],[440,0.18],[392,0.36],[0,0.18],
-  ],
-  // Phrase C — tension / bridge
-  [
-    [392,0.18],[0,0.09],[415,0.18],[0,0.09],[440,0.28],[0,0.09],
-    [466,0.18],[440,0.18],[415,0.18],[0,0.18],[392,0.28],[349,0.18],
-    [329,0.18],[294,0.18],[261,0.36],[0,0.28],
-  ],
-];
-
-let bgMusicNode  = null;   // master gain — exists while music is running
-let bgMusicStop  = false;  // flag to cancel the async scheduler
-let bgPhraseIdx  = 0;
-
-function _buildPhraseOrder() {
-  // Play A then randomly choose B or C, then the remaining one — so A always
-  // anchors but B/C are shuffled to add variety.
-  const tail = Math.random() < 0.5 ? [1, 2] : [2, 1];
-  return [0, ...tail];
-}
-
-async function _schedulePhrases(masterGain, ctx) {
-  let order = _buildPhraseOrder();
-  let phrasePos = 0;
-
-  while (!bgMusicStop) {
-    const phrase = BG_PHRASES[order[phrasePos % order.length]];
-    phrasePos++;
-    if (phrasePos % order.length === 0) order = _buildPhraseOrder(); // reshuffle each cycle
-
-    let t = ctx.currentTime + 0.05;
-    for (const [freq, dur] of phrase) {
-      if (bgMusicStop) break;
-      if (freq > 0) {
-        const osc  = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(masterGain);
-        osc.type = 'square';
-        osc.frequency.value = freq;
-        gain.gain.setValueAtTime(0.035, t);
-        gain.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.85);
-        osc.start(t);
-        osc.stop(t + dur);
-      }
-      t += dur;
-    }
-
-    // Wait until the phrase finishes before scheduling next one
-    const phraseLen = phrase.reduce((s,[,d]) => s + d, 0);
-    const waitMs = Math.max(0, (t - ctx.currentTime) * 1000 - 100);
-    await new Promise(res => setTimeout(res, waitMs));
-  }
-}
-
-function startBGMusic() {
-  if (STATE.muted || bgMusicNode) return;  // already playing or user muted
-  try {
-    const ctx = getAudioCtx();
-    bgMusicStop = false;
-    bgMusicNode = ctx.createGain();
-    bgMusicNode.gain.value = 1;
-    bgMusicNode.connect(ctx.destination);
-    _schedulePhrases(bgMusicNode, ctx);
-  } catch(e) {}
-}
-
-function stopBGMusic() {
-  bgMusicStop = true;
-  if (bgMusicNode) {
-    try { bgMusicNode.disconnect(); } catch(e) {}
-    bgMusicNode = null;
-  }
-}
-
 function toggleMute() {
   STATE.muted = !STATE.muted;
   document.getElementById('mute-btn').textContent = STATE.muted ? '✕ SOUND OFF' : '♪ SOUND ON';
-  if (STATE.muted) {
-    stopBGMusic();   // hard stop — will not restart unless user toggles back
-  } else {
-    startBGMusic();  // only restarts on explicit user action
-  }
 }
 
-// ── HUD UPDATE ─────────────────────────────────
+/* ── HUD ───────────────────────────────────────────────────── */
 function updateHUD() {
   const rank = RANKS[STATE.rank];
-  const el = document.getElementById('hud-rank');
-  el.textContent = rank.name.split(' ')[0];
-  el.style.color = rank.color;
-  el.style.textShadow = `0 0 8px ${rank.color}`;
-
-  document.getElementById('hud-cases').textContent = `${STATE.casesCompleted.length}/3`;
-  document.getElementById('hud-score').textContent = STATE.score;
-
-  // XP bar
   const nextRank = RANKS[STATE.rank + 1];
-  if (nextRank) {
-    const pct = Math.min(100, ((STATE.xp - rank.xpNeeded) / (nextRank.xpNeeded - rank.xpNeeded)) * 100);
-    document.getElementById('xp-fill').style.width = pct + '%';
-  } else {
-    document.getElementById('xp-fill').style.width = '100%';
-    document.getElementById('xp-fill').style.background = '#ff00ff';
-  }
+  document.getElementById('hud-rank').textContent  = rank.name;
+  document.getElementById('hud-cases').textContent = STATE.casesCompleted.length + '/4';
+  document.getElementById('hud-score').textContent = STATE.score;
+  const pct = nextRank
+    ? Math.min(100, ((STATE.xp - rank.xp) / (nextRank.xp - rank.xp)) * 100)
+    : 100;
+  document.getElementById('xp-fill').style.width = pct + '%';
 }
 
-// ── SCREEN MANAGEMENT ──────────────────────────
-function showScreen(id) {
-  ['title-screen','outbreak-select','game-scene','rankup-screen','victory-screen'].forEach(s => {
-    const el = document.getElementById(s);
-    if (el) el.style.display = 'none';
-  });
-  const target = document.getElementById(id);
-  if (target) {
-    target.style.display = 'flex';
-    // All screens are column-direction flex containers
-    target.style.flexDirection = 'column';
+function awardXP(amount) {
+  STATE.score += amount;
+  STATE.xp    += amount;
+  let ranked = false;
+  while (STATE.rank < RANKS.length - 1 && STATE.xp >= RANKS[STATE.rank + 1].xp) {
+    STATE.rank++;
+    ranked = true;
   }
+  updateHUD();
+  return ranked;
+}
+
+/* ── SCREEN SWITCHER ───────────────────────────────────────── */
+function showScreen(id) {
+  const screens = ['title-screen','outbreak-select','game-scene','rankup-screen','victory-screen'];
+  screens.forEach(s => {
+    const el = document.getElementById(s);
+    if (el) el.style.display = (s === id) ? 'flex' : 'none';
+  });
 }
 
 function showOutbreakSelect() {
+  updateCaseCards();
   showScreen('outbreak-select');
   STATE.screen = 'select';
-  // Unlock logic
-  if (STATE.casesCompleted.includes('buffet')) {
-    document.getElementById('case-legionnaires').classList.remove('locked');
-    document.getElementById('case-legionnaires').classList.add('unlocked');
-    document.getElementById('case-legionnaires-status').textContent = 'OPEN';
-    document.getElementById('case-legionnaires-status').style.color = 'var(--green)';
-  }
-  if (STATE.casesCompleted.includes('legionnaires')) {
-    document.getElementById('case-measles').classList.remove('locked');
-    document.getElementById('case-measles').classList.add('unlocked');
-    document.getElementById('case-measles-status').textContent = 'OPEN';
-    document.getElementById('case-measles-status').style.color = 'var(--green)';
-  }
-  STATE.casesCompleted.forEach(c => {
-    const el = document.getElementById(`case-${c}`);
-    if (el) {
-      el.classList.add('completed');
-      el.querySelector('[id$="-status"]') && (el.querySelector('[id$="-status"]').textContent = '✓ SOLVED');
-    }
+}
+
+/* ── CASE CARD MANAGEMENT ──────────────────────────────────── */
+const CASE_IDS = ['buffet','pruno','legionnaires','measles'];
+
+function updateCaseCards() {
+  CASE_IDS.forEach(id => {
+    const card    = document.getElementById('case-' + id);
+    const status  = document.getElementById('case-' + id + '-status');
+    const keyBadge= document.getElementById('key-' + id);
+    if (!card) return;
+
+    const completed = STATE.casesCompleted.includes(id);
+    const unlocked  = isCaseUnlocked(id);
+
+    card.className = 'outbreak-card ' + (completed ? 'completed' : unlocked ? 'unlocked' : 'locked');
+    if (keyBadge) keyBadge.className = 'outbreak-key-badge' + (unlocked ? '' : ' locked-key');
+    if (status) status.textContent = completed ? '✓ SOLVED' : unlocked ? 'OPEN' : 'LOCKED';
   });
 }
 
-// ── TYPEWRITER ─────────────────────────────────
-function typeText(text, speed = 28, callback) {
-  clearTimeout(STATE.typewriterTimer);
-  const el = document.getElementById('dialog-text');
-  el.classList.add('typing');
-  el.textContent = '';
-  STATE.typing = true;
-  STATE.fullText = text;
-  let i = 0;
+function isCaseUnlocked(id) {
+  const UNLOCK = {
+    buffet:       () => true,
+    pruno:        () => true,
+    legionnaires: () => STATE.casesCompleted.includes('buffet') && STATE.casesCompleted.includes('pruno'),
+    measles:      () => STATE.casesCompleted.includes('legionnaires'),
+  };
+  return UNLOCK[id] ? UNLOCK[id]() : false;
+}
 
-  function tick() {
-    if (i < text.length) {
-      el.textContent = text.slice(0, ++i);
-      if (text[i-1] !== ' ') playSFX('blip');
-      STATE.typewriterTimer = setTimeout(tick, speed);
-    } else {
-      el.classList.remove('typing');
-      STATE.typing = false;
-      document.getElementById('continue-prompt').style.display = 'block';
-      if (callback) callback();
-    }
+function tryStartCase(id) {
+  if (!isCaseUnlocked(id)) {
+    flashLockMessage(id);
+    return;
   }
-  document.getElementById('continue-prompt').style.display = 'none';
-  tick();
+  playSFX('click');
+  loadCase(id);
 }
 
-function skipTyping() {
-  if (STATE.typing) {
-    clearTimeout(STATE.typewriterTimer);
-    document.getElementById('dialog-text').classList.remove('typing');
-    document.getElementById('dialog-text').textContent = STATE.fullText;
-    STATE.typing = false;
-    document.getElementById('continue-prompt').style.display = 'block';
-  }
+function flashLockMessage(id) {
+  const msgs = {
+    legionnaires: 'Complete both easy cases (Cases 1 & 2) to unlock this investigation.',
+    measles:      'Complete the Legionnaires\' case (Case 3) to unlock this investigation.',
+  };
+  const el = document.getElementById('lock-flash');
+  if (!el) return;
+  el.textContent = msgs[id] || 'Complete earlier cases to unlock this one.';
+  el.classList.add('visible');
+  clearTimeout(flashLockMessage._timer);
+  flashLockMessage._timer = setTimeout(() => el.classList.remove('visible'), 3500);
 }
 
-// ── CASEFILE ───────────────────────────────────
-function addCasefile(entry, isNew = true) {
-  STATE.casefileEntries.push({ text: entry, isNew });
-  renderCasefile();
+/* ── NOTEBOOK / CASEFILE ───────────────────────────────────── */
+const caseNames = { buffet:'Case 1 — The Banquet Incident', pruno:'Case 2 — The Pruno Incident', legionnaires:'Case 3 — City Center Cluster', measles:'Case 4 — The Vaccine Hesitancy Crisis' };
+
+function initCasefile(caseId) {
+  STATE.casefileText = `# ${caseNames[caseId] || 'Investigation Notes'}\n\n`;
+  const editor = document.getElementById('casefile-editor');
+  if (editor) editor.value = STATE.casefileText;
 }
 
-function renderCasefile() {
-  const container = document.getElementById('casefile-entries');
-  container.innerHTML = '';
-  STATE.casefileEntries.forEach(e => {
-    const div = document.createElement('div');
-    div.className = 'casefile-entry' + (e.isNew ? ' new' : '');
-    div.textContent = '\u25b8 ' + e.text;
-    container.appendChild(div);
-  });
+function appendCasefile(text) {
+  STATE.casefileText += '- ' + text + '\n';
+  const editor = document.getElementById('casefile-editor');
+  if (editor) editor.value = STATE.casefileText;
 }
 
 function downloadNotebook() {
-  const caseNames = { buffet: 'Case 1 — The Banquet Incident', legionnaires: 'Case 2 — City Center Cluster', measles: 'Case 3 — The Vaccine Hesitancy Crisis' };
-  const caseName = caseNames[STATE.currentCase] || 'Investigation';
-  const dateStr = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
-
-  const lines = [
-    '========================================',
-    '  EPI DETECTIVE — INVESTIGATION NOTEBOOK',
-    '========================================',
-    '',
-    `CASE: ${caseName}`,
-    `DATE PRINTED: ${dateStr}`,
-    `RANK: ${(window.RANKS && RANKS[STATE.rank]) ? RANKS[STATE.rank].name : 'Rookie'}`,
-    `SCORE: ${STATE.score} XP`,
-    '',
-    '----------------------------------------',
-    '  FIELD NOTES',
-    '----------------------------------------',
-    '',
-    ...STATE.casefileEntries.map((e, i) => `[${String(i+1).padStart(2,'0')}] ${e.text}`),
-    '',
-    '----------------------------------------',
-    '  END OF NOTEBOOK',
-    '----------------------------------------',
-  ];
-
-  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-  const url  = URL.createObjectURL(blob);
+  const editor = document.getElementById('casefile-editor');
+  const content = editor ? editor.value : STATE.casefileText;
+  const blob = new Blob([content], { type: 'text/markdown' });
   const a    = document.createElement('a');
-  a.href     = url;
-  a.download = `epi-detective-notebook-${STATE.currentCase || 'notes'}.txt`;
+  a.href     = URL.createObjectURL(blob);
+  a.download = 'investigation-notes.md';
   a.click();
-  URL.revokeObjectURL(url);
+  URL.revokeObjectURL(a.href);
 }
 
-// ── XP & RANK ──────────────────────────────────
-function awardXP(amount) {
-  STATE.xp += amount;
-  STATE.score += amount;
-  updateHUD();
-  // Check rank up
-  let newRank = 0;
-  for (let i = RANKS.length - 1; i >= 0; i--) {
-    if (STATE.xp >= RANKS[i].xpNeeded) { newRank = i; break; }
+function toggleMdGuide() {
+  const guide = document.getElementById('md-guide');
+  if (!guide) return;
+  const isOpen = guide.classList.contains('open');
+  if (!isOpen) {
+    guide.innerHTML = `
+      <h4>WHAT IS MARKDOWN?</h4>
+      <p>Markdown is a simple way to format plain text so it looks great when converted to a document. Your notes are saved as a <code>.md</code> file — any Markdown editor (Obsidian, Notion, VS Code, Typora) will render the formatting automatically.</p>
+      <h4 style="margin-top:10px;">QUICK SYNTAX GUIDE</h4>
+      <div class="md-row"><span class="md-syntax"><code># Heading 1</code></span><span>Large title heading</span></div>
+      <div class="md-row"><span class="md-syntax"><code>## Heading 2</code></span><span>Section heading</span></div>
+      <div class="md-row"><span class="md-syntax"><code>**bold text**</code></span><span><strong>Bold text</strong></span></div>
+      <div class="md-row"><span class="md-syntax"><code>*italic text*</code></span><span><em>Italic text</em></span></div>
+      <div class="md-row"><span class="md-syntax"><code>- item</code></span><span>Bullet list item</span></div>
+      <div class="md-row"><span class="md-syntax"><code>1. item</code></span><span>Numbered list item</span></div>
+      <div class="md-row"><span class="md-syntax"><code>> quote</code></span><span>Block quote / note</span></div>
+      <div class="md-row"><span class="md-syntax"><code>\`code\`</code></span><span>Inline code / formula</span></div>
+    `;
   }
-  if (newRank > STATE.rank) {
-    STATE.rank = newRank;
-    updateHUD();
-    return true; // ranked up
-  }
-  return false;
+  guide.classList.toggle('open', !isOpen);
 }
 
-// ── SCENE PAINTER ──────────────────────────────
-const SCENE_PAINTERS = {
-  title: paintSceneTitle,
-  buffet: paintSceneBuffet,
-  legionnaires: paintSceneLegionnaires,
-  measles: paintSceneMeasles,
-  lab: paintSceneLab,
-  press: paintScenePress,
-};
-
-// Map scene names to panel image filenames under media/panels/
-// The user will drop 8-bit artwork files into that folder to replace placeholders.
+/* ── SCENE PANELS ──────────────────────────────────────────── */
 const SCENE_PANELS = {
-  // Buffet / foodborne outbreak
-  buffet:                    'buffet_lunch.png',
-  lab:                       'lab_report.png',
-  press:                     'press_conference.png',
-  // Legionnaires' outbreak
-  legionnaires:              'legionnaires_hotel.png',
-  legionnaires_lab:          'legionnaires_lab_results.png',
-  legionnaires_interviews:   'legionnaires_interviews.png',
-  legionnaires_spatial:      'legionnaires_spatial.png',
-  legionnaires_cooling_tower:'legionnaires_cooling_tower.png',
-  legionnaires_press:        'legionnaires_press.png',
-  // Measles / VPD outbreak
-  measles:                      'measles_school.png',
-  measles_nurse_records:        'measles_nurse_records.png',
-  measles_vaccine_efficacy:     'measles_vaccine_efficacy.png',
-  measles_facebook:             'measles_facebook.png',
-  measles_natural_vs_vaccine:   'measles_natural_vs_vaccine.png',
-  measles_outbreak_projection:  'measles_outbreak_projection.png',
-  measles_vaccine_clinic:       'measles_vaccine_clinic.png',
-  measles_pediatrician:         'measles_pediatrician.png',
-  measles_health_officer_close: 'measles_health_officer_close.png',
+  buffet:                     'media/panels/buffet_lunch.png',
+  buffet_kitchen:             'media/panels/buffet_kitchen.png',
+  lab:                        'media/panels/lab_report.png',
+  press:                      'media/panels/press_conference.png',
+  pruno_prison:               'media/panels/pruno_prison.jpg',
+  pruno_inmates_sick:         'media/panels/pruno_inmates_sick.jpg',
+  pruno_lab:                  'media/panels/pruno_lab.jpg',
+  pruno_interviews:           'media/panels/pruno_interviews.jpg',
+  pruno_antitoxin:            'media/panels/pruno_antitoxin.jpg',
+  pruno_press:                'media/panels/pruno_press.jpg',
+  legionnaires:               'media/panels/legionnaires_hotel.png',
+  legionnaires_lab:           'media/panels/legionnaires_lab_results.png',
+  legionnaires_interviews:    'media/panels/legionnaires_interviews.png',
+  legionnaires_spatial:       'media/panels/legionnaires_spatial.png',
+  legionnaires_cooling_tower: 'media/panels/legionnaires_cooling_tower.png',
+  legionnaires_press:         'media/panels/legionnaires_press.png',
+  measles:                    'media/panels/measles_school.png',
+  measles_nurse_records:      'media/panels/measles_nurse_records.png',
+  measles_vaccine_efficacy:   'media/panels/measles_vaccine_efficacy.png',
+  measles_facebook:           'media/panels/measles_facebook.png',
+  measles_natural_vs_vaccine: 'media/panels/measles_natural_vs_vaccine.png',
+  measles_outbreak_projection:'media/panels/measles_outbreak_projection.png',
+  measles_vaccine_clinic:     'media/panels/measles_vaccine_clinic.png',
+  measles_pediatrician:       'media/panels/measles_pediatrician.png',
+  measles_health_officer_close:'media/panels/measles_health_officer_close.png',
 };
 
-function paintScene(name) {
-  const canvas = document.getElementById('scene-canvas');
-  const panel  = document.getElementById('scene-panel');
+function paintScene(sceneKey) {
+  const canvas  = document.getElementById('scene-canvas');
+  const imgEl   = document.getElementById('scene-panel');
   if (!canvas) return;
-  canvas.width = canvas.offsetWidth || 860;
 
-  // Always paint the procedural canvas art as a fallback
-  const fn = SCENE_PAINTERS[name] || SCENE_PAINTERS.lab;
-  fn(canvas);
-
-  // Attempt to show the 8-bit panel image if one is available
-  if (panel && SCENE_PANELS[name]) {
-    const src = 'media/panels/' + SCENE_PANELS[name];
-    panel.onload  = () => { panel.style.display = 'block'; };
-    panel.onerror = () => { panel.style.display = 'none';  }; // fallback to canvas
-    if (panel.src !== src) panel.src = src;
-    // If src unchanged (same scene repaint), respect current display state
-  } else if (panel) {
-    panel.style.display = 'none';
-  }
-}
-
-function pixelRect(ctx, x, y, w, h, color) {
-  ctx.fillStyle = color;
-  ctx.fillRect(Math.floor(x), Math.floor(y), Math.floor(w), Math.floor(h));
-}
-
-function paintSceneTitle(canvas) { /* handled by star canvas */ }
-
-function paintSceneBuffet(canvas) {
   const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  // Background gradient (restaurant)
-  const grad = ctx.createLinearGradient(0,0,0,H);
-  grad.addColorStop(0,'#1a0800'); grad.addColorStop(1,'#3d1500');
-  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
-  // Floor tiles
-  for (let x = 0; x < W; x += 32) {
-    pixelRect(ctx, x, H-32, 32, 32, x%64===0 ? '#2a1000' : '#1a0a00');
-    pixelRect(ctx, x, H-64, 32, 32, '#3d1800');
-  }
-  // Table
-  pixelRect(ctx, W/2-80, H-80, 160, 16, '#5c3000');
-  pixelRect(ctx, W/2-72, H-96, 144, 16, '#7a4000');
-  // Food items on table (pixel art)
-  const foods = [
-    {x:W/2-60, color:'#cc2200', label:'Chicken'}, // red = suspect
-    {x:W/2-20, color:'#88aa00', label:'Salad'},
-    {x:W/2+20, color:'#ddaa00', label:'Rice'},
-    {x:W/2+50, color:'#ff6600', label:'Shrimp'},
-  ];
-  foods.forEach(f => {
-    pixelRect(ctx, f.x-12, H-112, 24, 16, f.color);
-    // plate
-    pixelRect(ctx, f.x-14, H-97, 28, 4, '#aaaaaa');
-  });
-  // Stick figure attendees (pixel art)
-  for (let i = 0; i < 5; i++) {
-    const fx = 40 + i * 150;
-    const colors = ['#4444ff','#ff4444','#44ff44','#ffff44','#ff44ff'];
-    drawPixelPerson(ctx, fx, H-40, colors[i]);
-  }
-  // Warning sign
-  pixelRect(ctx, W-60, 20, 48, 36, '#ff2200');
-  ctx.fillStyle = '#ffff00';
-  ctx.font = '18px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('!', W-36, 44);
-  ctx.font = '7px monospace';
-  ctx.fillText('OUTBREAK', W-36, 54);
-}
+  canvas.width  = canvas.offsetWidth || 860;
+  canvas.height = 240;
 
-function drawPixelPerson(ctx, x, y, color) {
-  // Head
-  pixelRect(ctx, x-4, y-24, 8, 8, color);
-  // Body
-  pixelRect(ctx, x-4, y-16, 8, 12, color);
-  // Arms
-  pixelRect(ctx, x-8, y-14, 4, 6, color);
-  pixelRect(ctx, x+4, y-14, 4, 6, color);
-  // Legs
-  pixelRect(ctx, x-4, y-4, 3, 8, color);
-  pixelRect(ctx, x+1, y-4, 3, 8, color);
-}
+  // Gradient background
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, '#0d1b2a');
+  grad.addColorStop(1, '#1a3a5c');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-function paintSceneLegionnaires(canvas) {
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  // Night sky
-  const grad = ctx.createLinearGradient(0,0,0,H);
-  grad.addColorStop(0,'#000814'); grad.addColorStop(1,'#001428');
-  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
-  // Stars
-  ctx.fillStyle = '#ffffff';
-  for (let i = 0; i < 40; i++) {
-    const sx = (i * 127 + 13) % W;
-    const sy = (i * 83 + 7) % (H * 0.6);
-    ctx.fillRect(sx, sy, (i%3===0)?2:1, (i%3===0)?2:1);
-  }
-  // Hotel building
-  const bx = W/2-80;
-  pixelRect(ctx, bx, 20, 160, H-40, '#1a2a3a');
-  // Windows (some lit = sick people)
-  const winColors = ['#001428','#ffe066','#ffe066','#001428','#ffe066','#001428','#001428','#ffe066'];
-  for (let row = 0; row < 4; row++) {
-    for (let col = 0; col < 4; col++) {
-      const wx = bx + 16 + col * 36;
-      const wy = 30 + row * 28;
-      const isLit = winColors[(row*4+col)%8] !== '#001428';
-      pixelRect(ctx, wx, wy, 20, 16, isLit ? '#ffe066' : '#001428');
-      if (isLit) {
-        pixelRect(ctx, wx+6, wy+4, 8, 6, '#ff6600'); // sick glow
-      }
-    }
-  }
-  // Cooling tower on roof
-  pixelRect(ctx, bx+40, 10, 30, 20, '#2a3a4a');
-  // Steam droplets
-  ctx.fillStyle = '#88ccff';
-  ctx.fillRect(bx+50, 2, 4, 4);
-  ctx.fillRect(bx+58, 0, 3, 3);
-  ctx.fillRect(bx+46, 5, 3, 3);
-  // Red cross / health marker
-  pixelRect(ctx, W-48, H-60, 36, 36, '#220000');
-  ctx.fillStyle = '#ff2200';
-  ctx.fillRect(W-40, H-56, 20, 6);
-  ctx.fillRect(W-34, H-62, 8, 18);
-  // Ground
-  pixelRect(ctx, 0, H-28, W, 28, '#0a1a0a');
-  pixelRect(ctx, 0, H-32, W, 4, '#0d2000');
-}
-
-function paintSceneMeasles(canvas) {
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  // School exterior
-  const grad = ctx.createLinearGradient(0,0,0,H);
-  grad.addColorStop(0,'#87ceeb'); grad.addColorStop(1,'#4682b4');
-  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H/2);
-  pixelRect(ctx, 0, H/2, W, H/2, '#1a1a1a');
-  // School building
-  pixelRect(ctx, W/2-120, H*0.2, 240, H*0.65, '#cc8833');
-  pixelRect(ctx, W/2-40, H*0.2-20, 80, 24, '#aa6622');  // gable
-  // Door
-  pixelRect(ctx, W/2-12, H*0.6, 24, 32, '#663300');
-  // School windows
-  for (let i = 0; i < 4; i++) {
-    const wx = W/2 - 100 + i*60;
-    pixelRect(ctx, wx, H*0.3, 28, 24, '#cceeff');
-    // Some windows have red spots (sick kids)
-    if (i===1 || i===3) {
-      ctx.fillStyle = '#ff2222';
-      ctx.fillRect(wx+4, H*0.3+4, 6, 6);
-      ctx.fillRect(wx+14, H*0.3+8, 4, 4);
-    }
-  }
-  // Children outside - some healthy, some sick
-  const childColors = ['#4444ff','#ff4444','#44ff44','#ff4444','#4444ff','#ff4444'];
-  childColors.forEach((c, i) => {
-    drawPixelPerson(ctx, 60 + i * 130, H-36, c);
-    if (c === '#ff4444') {
-      // Rash dots
-      ctx.fillStyle = '#ffaa00';
-      ctx.fillRect(60+i*130-6, H-50, 3, 3);
-      ctx.fillRect(60+i*130+2, H-48, 3, 3);
-    }
-  });
-  // Anti-vax protest sign (pixel art)
-  pixelRect(ctx, W-100, H/2-30, 4, 60, '#885522');  // stick
-  pixelRect(ctx, W-116, H/2-40, 40, 24, '#ffffff');
-  ctx.fillStyle = '#ff0000';
-  ctx.font = '7px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('NO VAX', W-96, H/2-26);
-  ctx.fillText('!!!!', W-96, H/2-16);
-}
-
-function paintSceneLab(canvas) {
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  const grad = ctx.createLinearGradient(0,0,0,H);
-  grad.addColorStop(0,'#0a0a1a'); grad.addColorStop(1,'#0d0d2a');
-  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
-  // Lab bench
-  pixelRect(ctx, 40, H-60, W-80, 20, '#2a2a3a');
-  // Microscope pixel art
-  pixelRect(ctx, 80, H-100, 12, 40, '#666688');
-  pixelRect(ctx, 76, H-64, 20, 8, '#666688');
-  pixelRect(ctx, 84, H-104, 8, 8, '#aaaacc');
-  // Lab samples
-  for (let i = 0; i < 6; i++) {
-    const colors = ['#ff2244','#22ff44','#2244ff','#ffff00','#ff44ff','#44ffff'];
-    pixelRect(ctx, 130 + i*60, H-80, 10, 24, colors[i]);
-    pixelRect(ctx, 128 + i*60, H-57, 14, 4, '#aaaaaa');
-  }
-  // Computer screen
-  pixelRect(ctx, W-160, H-110, 100, 72, '#222244');
-  pixelRect(ctx, W-156, H-106, 92, 60, '#001144');
-  // Epi curve on screen
-  const barH = [15,28,42,38,25,14,8];
-  barH.forEach((bh, i) => {
-    ctx.fillStyle = i < 3 ? '#ff4444' : '#4488ff';
-    ctx.fillRect(W-152 + i*12, H-106+60-bh, 9, bh);
-  });
-  // CDC logo placeholder
-  pixelRect(ctx, W-60, 20, 44, 20, '#003366');
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '8px monospace';
-  ctx.textAlign = 'center';
-  ctx.fillText('CDC', W-38, 34);
-}
-
-function paintScenePress(canvas) {
-  const ctx = canvas.getContext('2d');
-  const W = canvas.width, H = canvas.height;
-  const grad = ctx.createLinearGradient(0,0,0,H);
-  grad.addColorStop(0,'#1a0000'); grad.addColorStop(1,'#2a0808');
-  ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
-  // Podium
-  pixelRect(ctx, W/2-40, H-80, 80, 60, '#3a2a00');
-  pixelRect(ctx, W/2-50, H-88, 100, 8, '#5c4200');
-  // Microphone
-  pixelRect(ctx, W/2-3, H-100, 6, 12, '#888888');
-  pixelRect(ctx, W/2-6, H-110, 12, 10, '#444444');
-  // Camera flashes (pixel dots)
-  const flashPositions = [[60,30],[200,50],[400,25],[600,40],[780,30]];
-  flashPositions.forEach(([fx,fy]) => {
-    ctx.fillStyle = 'rgba(255,255,200,0.7)';
-    ctx.fillRect(fx, fy, 6, 6);
-    ctx.fillStyle = 'rgba(255,255,200,0.2)';
-    ctx.fillRect(fx-4, fy-4, 14, 14);
-  });
-  // Audience (pixel people)
-  for (let i = 0; i < 8; i++) {
-    drawPixelPerson(ctx, 50 + i * 110, H-40, '#336633');
+  const panelSrc = SCENE_PANELS[sceneKey];
+  if (panelSrc && imgEl) {
+    imgEl.src = panelSrc;
+    imgEl.style.display = 'block';
+  } else if (imgEl) {
+    imgEl.style.display = 'none';
   }
 }
 
-// Star canvas for title
-function drawStars() {
-  const canvas = document.getElementById('star-canvas');
-  if (!canvas) return;
-  canvas.width = canvas.parentElement.offsetWidth || 860;
-  const ctx = canvas.getContext('2d');
-  ctx.clearRect(0,0,canvas.width, canvas.height);
-  for (let i = 0; i < 80; i++) {
-    const x = (i * 127 + 31) % canvas.width;
-    const y = (i * 83 + 17) % canvas.height;
-    const bright = i % 4 === 0;
-    ctx.fillStyle = bright ? '#ffffff' : '#aaaacc';
-    ctx.fillRect(x, y, bright ? 2 : 1, bright ? 2 : 1);
-  }
+/* ── FIELD REFERENCE ───────────────────────────────────────── */
+const FIELD_REFERENCE = {
+  buffet: [
+    { name:'Salmonella spp.',           incubation:'6–72 h',    route:'Eggs, poultry, unpasteurized dairy, produce', symptoms:'Diarrhea (sometimes bloody), fever, stomach cramps, vomiting', control:'Cook poultry and eggs thoroughly; refrigerate foods promptly; practice good hand washing', gram:'Gram-negative rod', media:'MacConkey agar (pink colonies, lactose-negative) and XLD agar', morphology:'Motile, facultatively anaerobic rod; produces H2S on XLD (black center)', key:'Common cause of egg-related outbreaks; Salmonella Enteritidis is the most frequent type linked to raw eggs' },
+    { name:'Staphylococcus aureus',     incubation:'1–6 h',     route:'Foods held at room temperature; food handlers with skin infections', symptoms:'Sudden vomiting, nausea, stomach cramps; usually short duration (24–48 h)', control:'Keep hot foods above 140°F (60°C); refrigerate within 2 hours; exclude ill food workers', gram:'Gram-positive coccus', media:'Mannitol salt agar (yellow colonies from mannitol fermentation)', morphology:'Clusters of cocci ("grape-like"); coagulase-positive', key:'Heat-stable toxin: reheating food will NOT destroy the toxin even if bacteria are killed' },
+    { name:'Clostridium perfringens',   incubation:'6–24 h',    route:'Large-batch foods (stews, gravies, meats) cooled slowly', symptoms:'Crampy diarrhea; vomiting is rare; generally mild and self-limited', control:'Rapid cooling of cooked foods; keep hot foods above 140°F; reheat to 165°F', gram:'Gram-positive rod', media:'Egg-yolk agar (lecithinase reaction)', morphology:'Box-car shaped rod; anaerobic spore-former; no motility', key:'Spores survive cooking and germinate during slow cooling; toxin is produced in the intestine during sporulation' },
+    { name:'Bacillus cereus',           incubation:'1–6 h (emetic); 6–15 h (diarrheal)', route:'Fried rice, pasta, starchy foods left at room temperature', symptoms:'Emetic form: vomiting. Diarrheal form: cramps and diarrhea', control:'Refrigerate rice and starchy dishes within 2 hours; do not reheat multiple times', gram:'Gram-positive rod', media:'MYP agar (pink colonies with precipitate ring)', morphology:'Large rod; endospore-forming; motile', key:'Spores survive boiling; the emetic toxin (cereulide) is heat-stable and forms in food before it is eaten' },
+    { name:'Norovirus',                 incubation:'12–48 h',   route:'Fecal-oral; contaminated food (especially shellfish, salads); infected food handlers', symptoms:'Sudden vomiting and diarrhea; low-grade fever; usually resolves in 1–3 days', control:'Exclude ill food handlers for 48 hours after symptoms clear; thorough cleaning with bleach solution', gram:'N/A — non-enveloped RNA virus (Caliciviridae family)', media:'RT-PCR from stool samples; not cultured in routine labs', morphology:'27–38 nm round-ish particle; very stable on surfaces', key:'Leading cause of foodborne illness outbreaks in the US; as few as 18 viral particles can cause infection' },
+    { name:'Campylobacter jejuni',      incubation:'1–10 days', route:'Raw or undercooked poultry; unpasteurized milk; contaminated water', symptoms:'Diarrhea (often bloody), fever, stomach cramps; sometimes mimics appendicitis', control:'Cook poultry thoroughly; pasteurize milk; practice good hand washing after handling raw meat', gram:'Gram-negative curved rod (described as "gull-wing" shaped)', media:'Campy-BAP or Skirrow agar (42°C incubation, microaerophilic conditions)', morphology:'Spirally curved rod; single polar flagellum; rapid "corkscrew" motility', key:'One of the most common bacterial causes of diarrhea in the US; rare complication: Guillain-Barré syndrome' },
+  ],
+  pruno: [
+    { name:'Clostridium botulinum',     incubation:'6 h – 10 days (typically 12–72 h)', route:'Eating food that already contains the preformed toxin (pruno, home-canned vegetables, honey in infants)', symptoms:'Descending (top-down) flaccid paralysis, double vision (diplopia), drooping eyelids (ptosis), slurred speech, difficulty swallowing; NO fever', control:'Heptavalent Botulinum Antitoxin (HBAT) from CDC; breathing support and mechanical ventilation if needed', gram:'Gram-positive rod', media:'Egg-yolk agar (lecithinase positive); must be grown under anaerobic (no oxygen) conditions', morphology:'Large rod; forms spores that look like a "tennis racket" (subterminal spores); strictly anaerobic', key:'There are 7 toxin types (A–G); Type A is most common in US food outbreaks. The toxin blocks the release of acetylcholine at nerve-muscle junctions.' },
+    { name:'Clostridium perfringens',   incubation:'6–24 h',    route:'Large-batch foods cooled too slowly; institutional settings', symptoms:'Crampy diarrhea; vomiting is uncommon; generally not severe', control:'Rapid cooling; keep hot foods above 140°F', gram:'Gram-positive rod', media:'Egg-yolk agar', morphology:'Box-car shaped rod; anaerobic spore-former', key:'Spores survive cooking and make toxin in the gut during sporulation' },
+    { name:'Clostridium difficile',     incubation:'Varies; often follows antibiotic use', route:'Fecal-oral route; healthcare and prison settings; spores persist on surfaces', symptoms:'Watery diarrhea, stomach cramping, fever; severe cases can develop colitis with pseudomembrane formation', control:'Contact precautions; bleach disinfection (alcohol hand gel does NOT kill the spores — soap and water required)', gram:'Gram-positive rod', media:'CCFA agar (yellow "ground glass" colonies); grown under anaerobic conditions', morphology:'Spore-forming rod; spores are extremely resistant and survive on surfaces for months', key:'Leading cause of healthcare-associated diarrhea; alcohol-based hand sanitizers do NOT kill C. diff spores' },
+    { name:'E. coli O157:H7 (STEC)',    incubation:'2–8 days',  route:'Contaminated water or food; fecal-oral spread in crowded institutions', symptoms:'Bloody diarrhea; severe stomach cramps; can cause Hemolytic Uremic Syndrome (HUS) in some cases', control:'Cook ground beef to 160°F; safe water; thorough hand washing; especially important in institutional settings', gram:'Gram-negative rod', media:'SMAC agar (colorless colonies, does not ferment sorbitol); sorbitol-MacConkey', morphology:'Sorbitol-negative; MUG-negative; typical E. coli colony on standard media otherwise', key:'Low infectious dose; HUS (kidney failure) is a life-threatening complication; high risk in crowded settings like prisons' },
+    { name:'Shigella spp.',             incubation:'12–96 h',   route:'Fecal-oral; extremely low infectious dose; crowded settings facilitate rapid spread', symptoms:'Bloody diarrhea, high fever, painful urge to defecate (tenesmus)', control:'Thorough hand washing with soap and water; safe water supply; exclude ill persons from food preparation', gram:'Gram-negative rod', media:'MacConkey agar (pale, lactose-negative colonies); HE and XLD agars', morphology:'Non-motile; does not produce H2S; non-spore-forming', key:'Fewer than 10 organisms can cause infection — this makes it extremely contagious in crowded settings like correctional facilities' },
+    { name:'Norovirus',                 incubation:'12–48 h',   route:'Fecal-oral; highly contagious in institutional settings like prisons', symptoms:'Vomiting, diarrhea, nausea; spreads rapidly among people in close quarters', control:'Isolate ill individuals; clean surfaces with bleach; keep ill persons out of food service for 48 hours after recovery', gram:'N/A — RNA virus (Caliciviridae)', media:'RT-PCR from stool; cannot be cultured in standard labs', morphology:'27–38 nm icosahedral particle', key:'The single most common cause of institutional gastroenteritis outbreaks in the US, including correctional facilities' },
+  ],
+  legionnaires: [
+    { name:'Legionella pneumophila',    incubation:'2–10 days', route:'Breathing in (inhaling) contaminated water droplets or aerosols from cooling towers, HVAC systems, showers, decorative fountains', symptoms:'Severe pneumonia, high fever, confusion, muscle aches, GI symptoms. A milder form (Pontiac fever) causes flu-like illness without pneumonia.', control:'Regular disinfection of cooling towers; building water management plans; chlorination', gram:'Gram-negative rod (stains poorly with standard Gram stain; use silver stain or DFA antibody stain)', media:'BCYE agar with L-cysteine (required for growth); bacteria will NOT grow on standard blood agar', morphology:'Slender rod; facultative intracellular pathogen (multiplies inside alveolar macrophages)', key:'The urinary antigen test (UAT) is the most common rapid test; BCYE agar requires L-cysteine — the bacteria cannot grow without it' },
+    { name:'Mycoplasma pneumoniae',     incubation:'1–4 weeks', route:'Respiratory droplets from person to person; causes community-acquired pneumonia', symptoms:'"Walking pneumonia" — dry hacking cough, low-grade fever, fatigue; gradual onset over weeks', control:'Treat with azithromycin or doxycycline (NOT penicillin or amoxicillin — no effect because Mycoplasma has no cell wall!)', gram:'No cell wall; appears Gram-negative by default but does not Gram stain well', media:'PPLO agar or SP4 broth; very slow growing (takes 1–3 weeks)', morphology:'Pleomorphic (no fixed shape); smallest known self-replicating organism; "fried egg" colonies on agar', key:'No cell wall means beta-lactam antibiotics (penicillins, cephalosporins) are completely ineffective' },
+    { name:'Streptococcus pneumoniae',  incubation:'1–3 days',  route:'Respiratory droplets; person-to-person transmission', symptoms:'Lobar pneumonia with sudden onset, high fever, productive cough with rust-colored sputum, chest pain', control:'Pneumococcal vaccines (PCV15, PCV20, PPSV23); antibiotics (penicillin or amoxicillin for susceptible strains)', gram:'Gram-positive coccus (diplococci — pairs)', media:'Blood agar (alpha-hemolysis, green zone around colonies)', morphology:'Lancet-shaped diplococci; encapsulated; bile-soluble; alpha-hemolytic on blood agar', key:'Most common cause of community-acquired pneumonia in adults; the capsule is the main virulence factor — targeted by vaccines' },
+    { name:'Influenza A',               incubation:'1–4 days',  route:'Respiratory droplets and aerosols', symptoms:'Sudden-onset fever, severe body aches (myalgia), dry cough, headache; can rapidly worsen to pneumonia', control:'Annual flu vaccine; antiviral medications (oseltamivir/Tamiflu) within 48 hours of symptom onset', gram:'N/A — segmented negative-sense RNA virus (Orthomyxoviridae family)', media:'Cell culture; RT-PCR from nasopharyngeal swab is preferred rapid test', morphology:'Pleomorphic enveloped virus; hemagglutinin (HA) and neuraminidase (NA) surface proteins determine the strain (e.g., H1N1)', key:'Segmented genome allows for antigenic shift (mixing of different influenza strains), which is how pandemic strains emerge' },
+    { name:'Aspergillus fumigatus',     incubation:'Days to weeks (especially in immunocompromised people)', route:'Breathing in fungal spores from the environment; construction sites and hospitals are high-risk', symptoms:'Invasive pulmonary aspergillosis in immunocompromised patients; chronic sinusitis in others', control:'HEPA air filtration during hospital construction; antifungal drugs (voriconazole) for high-risk patients', gram:'N/A — fungus (mold)', media:'Sabouraud dextrose agar; blue-green colonies', morphology:'Septate hyphae branching at 45-degree angles; columnar (column-like) conidial heads under the microscope', key:'Galactomannan antigen test (blood or BAL fluid) is used for early diagnosis in immunocompromised patients' },
+    { name:'Coccidioides immitis',      incubation:'1–3 weeks', route:'Breathing in spores from disturbed desert soil; common in the southwestern US (San Joaquin Valley fever)', symptoms:'"Valley fever" — flu-like illness, chest pain, fatigue; serious disseminated disease in immunocompromised patients', control:'Avoid exposure to disturbed desert soil; antifungal treatment for disseminated disease', gram:'N/A — dimorphic fungus (looks different in the lab vs. in the body)', media:'Sabouraud agar (mold form in lab); BSL-3 precautions required — the spores are highly infectious in the lab!', morphology:'Spherules (round structures containing endospores) in infected tissue; barrel-shaped arthroconidia in soil', key:'Spherules in tissue are diagnostic; the arthroconidia (spores) in the lab are dangerously infectious — must be handled with extreme caution' },
+  ],
+  measles: [
+    { name:'Measles virus (Rubeola)',   incubation:'7–21 days (average 14 days)', route:'Airborne transmission via droplet nuclei; extremely contagious (R₀ = 12–18)', symptoms:'Prodrome: fever, cough, runny nose (coryza), red watery eyes (conjunctivitis); Koplik spots on inner cheeks; then maculopapular rash spreading head-to-toe', control:'MMR vaccine (2 doses, about 97% effective); isolate cases for 4 days after rash onset; post-exposure vaccination within 72 hours can prevent disease', gram:'N/A — non-segmented negative-sense RNA virus (Paramyxoviridae family)', media:'Vero/hSLAM cell culture; RT-PCR from nasopharyngeal swab, urine, or throat swab', morphology:'Pleomorphic enveloped virus; fusion (F) and hemagglutinin (H) surface proteins; infected cells show nuclear and cytoplasmic inclusion bodies', key:'Koplik spots (tiny blue-white spots on the inner cheeks) are PATHOGNOMONIC (unique to measles); the virus can remain airborne for up to 2 hours after an infected person leaves a room' },
+    { name:'Mumps virus',               incubation:'12–25 days', route:'Respiratory droplets and saliva contact', symptoms:'Swollen, painful salivary glands (parotitis — the classic "chipmunk cheeks" appearance), fever; can cause meningitis or orchitis', control:'MMR vaccine (2 doses, about 88% effective); isolate for 5 days after parotitis onset', gram:'N/A — paramyxovirus', media:'Cell culture; RT-PCR from buccal (cheek) swab', morphology:'Pleomorphic enveloped virus; hemagglutinin-neuraminidase (HN) surface protein', key:'Post-pubertal males who get mumps can develop orchitis (testicular inflammation); vaccine is about 88% effective with 2 doses' },
+    { name:'Rubella virus',             incubation:'12–23 days', route:'Respiratory droplets from person to person', symptoms:'Mild rash, low fever, swollen lymph nodes (especially behind the ears); Congenital Rubella Syndrome (CRS) can occur if a pregnant woman is infected', control:'MMR vaccine; screen pregnant women for rubella immunity; vaccinate women of childbearing age before pregnancy', gram:'N/A — positive-sense RNA virus (Togaviridae family)', media:'Cell culture; serology (IgM antibody testing); RT-PCR', morphology:'Enveloped icosahedral capsid; E1 and E2 surface glycoproteins', key:'Congenital Rubella Syndrome (CRS) triad: heart defects, cataracts, and hearing loss in the newborn if mom is infected in the first trimester' },
+    { name:'Bordetella pertussis',      incubation:'7–20 days',  route:'Respiratory droplets; highly contagious', symptoms:'Three stages: catarrhal (cold-like), paroxysmal (severe coughing fits with a "whooping" sound), convalescent (gradual recovery); infants may have apnea (pauses in breathing)', control:'DTaP vaccine (children) and Tdap booster (adolescents and adults); treat exposed contacts with azithromycin', gram:'Gram-negative coccobacillus (very small, almost round rod)', media:'Bordet-Gengou agar (classic) or Regan-Lowe medium; PCR is now the preferred diagnostic test', morphology:'Small, encapsulated coccobacillus; filamentous hemagglutinin helps it attach to respiratory cells', key:'Called "the 100-day cough"; adolescents and adults are often the source of infection for unvaccinated infants, who are at highest risk for serious disease' },
+    { name:'Varicella-zoster virus (VZV)', incubation:'10–21 days', route:'Airborne transmission; direct contact with fluid from blisters', symptoms:'Itchy blister-like rash appearing in crops (different stages at the same time), fever, fatigue; reactivation later in life causes shingles (herpes zoster)', control:'Varicella vaccine (2 doses); antiviral treatment (acyclovir) for high-risk individuals; airborne precautions in healthcare settings', gram:'N/A — DNA virus (Herpesviridae family)', media:'Cell culture; PCR from lesion scraping is most accurate; DFA staining', morphology:'Enveloped icosahedral virus; stays latent (dormant) in dorsal root ganglia after initial infection', key:'Second household case has over 90% attack rate; dangerous for newborns when mother develops chickenpox just before delivery' },
+    { name:'Hepatitis B virus (HBV)',   incubation:'45–180 days (average about 90 days)', route:'Bloodborne; sexual contact; perinatal (mother to newborn); needle sharing', symptoms:'Acute hepatitis (jaundice, fatigue, dark urine, nausea); chronic infection can progress to liver cirrhosis and liver cancer (HCC); flu-like prodrome', control:'3-dose or 2-dose HBV vaccine series; hepatitis B immune globulin (HBIG) for exposed newborns; universal infant vaccination in the US', gram:'N/A — partially double-stranded DNA virus (Hepadnaviridae family)', media:'Serology is the standard diagnostic (HBsAg, anti-HBc, anti-HBs); not cultured in routine labs', morphology:'Dane particle (42 nm, fully infectious); also produces non-infectious 22 nm surface antigen particles', key:'HBsAg = active infection; anti-HBs = immune (from vaccine or recovery); HBeAg = high viral replication and high infectivity' },
+  ],
+};
+
+function renderFieldReference(caseId) {
+  const content = document.getElementById('fieldref-content');
+  if (!content || !caseId) return;
+  const agents = FIELD_REFERENCE[caseId];
+  if (!agents || !agents.length) { content.innerHTML = '<p style="font-family:var(--font-body);color:var(--text-faint);font-size:13px;">No field reference available for this case.</p>'; return; }
+
+  content.innerHTML = `
+    <div class="fieldref-section">
+      <div class="fieldref-section-header" onclick="toggleFieldSection(this)">
+        OUTBREAK INVESTIGATION BASICS <span class="toggle">+</span>
+      </div>
+      <div class="fieldref-section-body">
+        <h5>Ten Steps of an Outbreak Investigation (CDC)</h5>
+        <ol style="padding-left:18px;line-height:2">
+          <li>Prepare for fieldwork</li>
+          <li>Establish that an outbreak is occurring</li>
+          <li>Verify the diagnosis</li>
+          <li>Define a case and identify cases (case definition)</li>
+          <li>Describe the data by person, place, and time</li>
+          <li>Develop hypotheses about the source</li>
+          <li>Test hypotheses (analytic epidemiology: cohort or case-control study)</li>
+          <li>Refine hypotheses and carry out additional studies as needed</li>
+          <li>Implement control and prevention measures</li>
+          <li>Communicate findings (report, press release, MMWR)</li>
+        </ol>
+        <h5>Key Formulas</h5>
+        <div class="epi-curve-example">Attack Rate (AR) = (Cases ÷ Population at Risk) × 100%
+
+Risk Ratio (RR) = AR in exposed ÷ AR in unexposed
+  (Used in cohort studies and outbreak investigations)
+
+Odds Ratio (OR) = (a × d) ÷ (b × c)  [from a 2×2 table]
+  (Used in case-control studies)
+
+Vaccine Efficacy (VE) = (AR unvaccinated − AR vaccinated) ÷ AR unvaccinated × 100%</div>
+        <h5>Case Definition Components</h5>
+        <ul>
+          <li><strong>Clinical criteria</strong> — signs and symptoms that must be present</li>
+          <li><strong>Laboratory criteria</strong> — confirmed lab test results</li>
+          <li><strong>Epidemiologic linkage</strong> — time, place, and person connections</li>
+          <li><strong>Classification</strong> — Confirmed / Probable / Suspected</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="fieldref-section">
+      <div class="fieldref-section-header" onclick="toggleFieldSection(this)">
+        HOW TO READ AN EPI CURVE <span class="toggle">+</span>
+      </div>
+      <div class="fieldref-section-body">
+        <h5>What is an Epidemic Curve?</h5>
+        <p>An epidemic curve (epi curve) is a bar chart (histogram) that shows how many new cases occurred over time. Each bar represents the number of new cases in a set time interval. It tells you the pattern, size, and timing of an outbreak.</p>
+
+        <h5>Pattern 1 — Point Source</h5>
+        <div class="epi-curve-example"><strong>Shape:</strong> Single sharp peak; cases are all clustered within one incubation period of each other.
+<strong>What it means:</strong> Everyone was exposed to the same source at one specific time and place (e.g., a buffet lunch, a single batch of contaminated pruno).
+<strong>Real-world example:</strong> A foodborne illness outbreak at a catered event.</div>
+
+        <h5>Pattern 2 — Propagated (Person-to-Person)</h5>
+        <div class="epi-curve-example"><strong>Shape:</strong> Multiple waves of cases, each wave separated by approximately one incubation period.
+<strong>What it means:</strong> Each case infects new people who then become new sources; the outbreak grows in "generations."
+<strong>Real-world examples:</strong> Norovirus in a dormitory, measles in a school, COVID-19.</div>
+
+        <h5>Pattern 3 — Continuous Common Source</h5>
+        <div class="epi-curve-example"><strong>Shape:</strong> A prolonged plateau or gradual rise and fall over multiple incubation periods.
+<strong>What it means:</strong> People are being exposed continuously or intermittently to the same contaminated source over time.
+<strong>Real-world examples:</strong> A contaminated water supply or cooling tower.</div>
+
+        <h5>Key Measurements You Can Read from an Epi Curve</h5>
+        <ul>
+          <li><strong>Incubation period</strong> — the time from exposure to when symptoms appear; helps narrow down the likely pathogen.</li>
+          <li><strong>Period of exposure</strong> — count backward from the earliest cases by one incubation period to estimate when exposure occurred.</li>
+          <li><strong>Peak</strong> — the day or time with the highest number of new cases.</li>
+          <li><strong>Tail</strong> — late cases may suggest secondary (person-to-person) spread or an outlier exposure.</li>
+        </ul>
+
+        <h5>Incubation Period Quick Reference</h5>
+        <div class="epi-curve-example">Staphylococcus aureus: 1–6 hours
+Clostridium perfringens: 6–24 hours
+Salmonella: 6–72 hours
+Norovirus: 12–48 hours
+Shigella: 12–96 hours
+E. coli O157:H7: 2–8 days
+Botulism: 6 hours to 10 days
+Campylobacter: 1–10 days
+Legionella: 2–10 days
+Hepatitis A: 15–50 days
+Measles: 7–21 days</div>
+      </div>
+    </div>
+
+    <div class="fieldref-section">
+      <div class="fieldref-section-header" onclick="toggleFieldSection(this)">
+        AGENTS FOR THIS OUTBREAK (${agents.length} pathogens) <span class="toggle">+</span>
+      </div>
+      <div class="fieldref-section-body">
+        ${agents.map(a => `
+          <div class="agent-card">
+            <div class="agent-card-header" onclick="toggleAgentCard(this)">
+              ${a.name} <span class="toggle">+</span>
+            </div>
+            <div class="agent-card-body">
+              <span class="agent-label">Incubation</span><span class="agent-value">${a.incubation}</span>
+              <span class="agent-label">Route of Spread</span><span class="agent-value">${a.route}</span>
+              <span class="agent-label">Signs & Symptoms</span><span class="agent-value">${a.symptoms}</span>
+              <span class="agent-label">Gram Stain / Type</span><span class="agent-value">${a.gram}</span>
+              <span class="agent-label">Lab Media</span><span class="agent-value">${a.media}</span>
+              <span class="agent-label">Morphology</span><span class="agent-value">${a.morphology}</span>
+              <span class="agent-label">Control Measures</span><span class="agent-value">${a.control}</span>
+              <span class="agent-label">Key Fact</span><span class="agent-value">${a.key}</span>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>
+  `;
 }
 
-// ── GAME NODE SYSTEM ───────────────────────────
+function toggleAgentCard(header) {
+  const body = header.nextElementSibling;
+  const toggle = header.querySelector('.toggle');
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  if (toggle) toggle.textContent = isOpen ? '+' : '−';
+}
+
+function toggleFieldSection(header) {
+  const body = header.nextElementSibling;
+  const toggle = header.querySelector('.toggle');
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  if (toggle) toggle.textContent = isOpen ? '+' : '−';
+}
+
+/* ── CASE LOADING ──────────────────────────────────────────── */
 let currentNodes = [];
 
 function loadCase(caseId) {
-  STATE.currentCase = caseId;
-  STATE.nodeIndex = 0;
-  STATE.casefileEntries = [];
-  STATE.toolsUserHidden = false;
+  STATE.currentCase  = caseId;
+  STATE.nodeIndex    = 0;
   STATE.casefileUserVisible = false;
+  STATE.toolsUserHidden     = false;
   STATE.pendingFeedbackNext = null;
-  document.getElementById('casefile-entries').innerHTML = '';
-  document.getElementById('feedback-panel').style.display = 'none';
-  document.getElementById('tools-panel').style.display = 'none';
-  document.getElementById('casefile-panel').style.display = 'none';
 
-  const cases = { buffet: CASE_BUFFET, legionnaires: CASE_LEGIONNAIRES, measles: CASE_MEASLES };
+  initCasefile(caseId);
+  renderFieldReference(caseId);
+
+  const cases = { buffet: CASE_BUFFET, pruno: CASE_PRUNO, legionnaires: CASE_LEGIONNAIRES, measles: CASE_MEASLES };
   currentNodes = cases[caseId] || [];
+
+  ['casefile-panel','tools-panel','feedback-panel','fieldref-panel'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  const cp = document.getElementById('choices-panel');
+  if (cp) { cp.innerHTML = ''; cp.style.display = 'none'; }
+  const editor = document.getElementById('casefile-editor');
+  if (editor) editor.value = STATE.casefileText;
+
   showScreen('game-scene');
   STATE.screen = 'game';
-  paintScene(caseId === 'legionnaires' ? 'legionnaires' : caseId === 'measles' ? 'measles' : 'buffet');
   advanceNode();
 }
 
-function advanceNode(choiceResult) {
-  document.getElementById('choices-panel').style.display = 'none';
-  document.getElementById('choices-panel').innerHTML = '';
-  document.getElementById('continue-prompt').style.display = 'none';
-  document.getElementById('feedback-panel').style.display = 'none';
-
+/* ── ADVANCE NODE ──────────────────────────────────────────── */
+function advanceNode() {
   if (STATE.nodeIndex >= currentNodes.length) {
     completeCase();
     return;
   }
-
   const node = currentNodes[STATE.nodeIndex];
   STATE.nodeIndex++;
 
-  // Scene change?
   if (node.scene) paintScene(node.scene);
+  if (node.casefile) appendCasefile(node.casefile);
 
-  // Tools panel?
+  const toolsPanel = document.getElementById('tools-panel');
   if (node.tools) {
     renderTools(node.tools);
-    // New data loaded — reset the user-hidden flag and show the panel
     STATE.toolsUserHidden = false;
-    document.getElementById('tools-panel').style.display = 'flex';
+    if (toolsPanel) toolsPanel.style.display = 'flex';
   } else if (!node.keepTools) {
-    // No tools for this node and not keeping old ones — hide the panel
     STATE.toolsUserHidden = false;
-    document.getElementById('tools-panel').style.display = 'none';
+    if (toolsPanel) toolsPanel.style.display = 'none';
   } else {
-    // keepTools: respect whatever the user last toggled
-    document.getElementById('tools-panel').style.display =
-      STATE.toolsUserHidden ? 'none' : 'flex';
+    if (toolsPanel) toolsPanel.style.display = STATE.toolsUserHidden ? 'none' : 'flex';
   }
 
-  // Casefile update?
-  if (node.casefile) {
-    addCasefile(node.casefile);
-    // Only reveal the panel for new entries; don't override user-hidden state
-    // (but always show when fresh content arrives)
-    STATE.casefileUserVisible = true;
-    document.getElementById('casefile-panel').style.display = 'block';
+  if (node.xp) { awardXP(node.xp); playSFX('xp'); }
+
+  const textBox    = document.getElementById('text-box');
+  const speakerEl  = document.getElementById('speaker-name');
+  const dialogEl   = document.getElementById('dialog-text');
+  const promptEl   = document.getElementById('continue-prompt');
+  const choicesPan = document.getElementById('choices-panel');
+  const fbPanel    = document.getElementById('feedback-panel');
+
+  if (fbPanel) fbPanel.style.display = 'none';
+  if (choicesPan) { choicesPan.innerHTML = ''; choicesPan.style.display = 'none'; }
+
+  textBox.className = 'pixel-box ' + (node.boxStyle || '');
+
+  if (speakerEl) speakerEl.textContent = node.speaker || '';
+  if (dialogEl)  dialogEl.textContent  = node.text    || '';
+
+  if (node.choices && node.choices.length) {
+    if (promptEl) promptEl.style.display = 'none';
+    renderChoices(node.choices);
   } else {
-    // No new entry — restore whatever the user last set
-    document.getElementById('casefile-panel').style.display =
-      STATE.casefileUserVisible ? 'block' : 'none';
-  }
-
-  // Speaker
-  const speakerEl = document.getElementById('speaker-name');
-  speakerEl.textContent = node.speaker || '';
-  speakerEl.style.color = getSpeakerColor(node.speaker);
-  speakerEl.style.textShadow = `0 0 6px ${getSpeakerColor(node.speaker)}`;
-
-  // Text box color
-  const tb = document.getElementById('text-box');
-  tb.className = 'pixel-box ' + (node.boxStyle || 'pixel-box-green');
-
-  // Dialog text
-  if (node.text) {
-    typeText(node.text, node.speed || 28, () => {
-      if (node.choices) renderChoices(node.choices);
-      else if (node.autoAdvance) setTimeout(advanceNode, node.autoAdvance);
-    });
-  }
-
-  // XP award — award immediately for HUD feedback, but NEVER redirect
-  // to rankup screen here. completeCase() owns that decision after all
-  // nodes (including the final closing node) have been advanced past.
-  if (node.xp) {
-    awardXP(node.xp);
-    playSFX('xp');
+    if (promptEl) promptEl.style.display = 'block';
   }
 }
 
-function getSpeakerColor(speaker) {
-  if (!speaker) return 'var(--text-dim)';
-  const s = speaker.toUpperCase();
-  if (s.includes('YOU') || s.includes('DETECTIVE') || s.includes('INVESTIGATOR')) return '#39ff14';
-  if (s.includes('HEALTH') || s.includes('DIRECTOR') || s.includes('OFFICER')) return '#00e5ff';
-  if (s.includes('LAB') || s.includes('SCIENTIST')) return '#ffe600';
-  if (s.includes('PARENT') || s.includes('CITIZEN') || s.includes('PATIENT')) return '#ff8c00';
-  if (s.includes('MEDIA') || s.includes('REPORTER')) return '#ff44ff';
-  if (s.includes('MENTOR') || s.includes('SUPERVISOR')) return '#aaaaff';
-  return '#cccccc';
+/* ── TOOLS RENDERER ────────────────────────────────────────── */
+function renderTools(tools) {
+  const titleEl   = document.getElementById('tools-panel-title');
+  const contentEl = document.getElementById('tools-content');
+  if (!contentEl) return;
+  if (titleEl) titleEl.textContent = tools.title || 'EPIDEMIOLOGICAL DATA';
+  contentEl.innerHTML = '';
+
+  if (tools.type === 'epicurve') {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'width:100%;overflow-x:auto;';
+    const canvas = document.createElement('canvas');
+    canvas.id = 'epi-curve-canvas';
+    const maxBars = tools.bars.length;
+    const bw = Math.max(40, Math.min(60, Math.floor((Math.min(window.innerWidth - 80, 860) - 80) / maxBars)));
+    canvas.width  = bw * maxBars + 80;
+    canvas.height = 200;
+    wrapper.appendChild(canvas);
+    contentEl.appendChild(wrapper);
+    drawEpiCurve(canvas, tools);
+  } else if (tools.type === 'twobytwo') {
+    const d = tools.data;
+    const el = document.createElement('div');
+    el.className = 'two-by-two';
+    el.innerHTML = `
+      <div class="cell corner"></div>
+      <div class="cell header">ILL (CASE)</div>
+      <div class="cell header">NOT ILL</div>
+      <div class="cell header">EXPOSED</div>
+      <div class="cell highlight">${d.a}</div>
+      <div class="cell">${d.b}</div>
+      <div class="cell header">NOT EXPOSED</div>
+      <div class="cell">${d.c}</div>
+      <div class="cell highlight">${d.d}</div>`;
+    contentEl.appendChild(el);
+    if (tools.note) {
+      const n = document.createElement('div');
+      n.style.cssText = 'font-family:var(--font-body);font-size:12px;color:var(--text-dim);margin-top:8px;';
+      n.textContent = tools.note;
+      contentEl.appendChild(n);
+    }
+  } else if (tools.type === 'table') {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'width:100%;overflow-x:auto;';
+    const table = document.createElement('table');
+    table.className = 'data-table';
+    table.innerHTML = `<thead><tr>${tools.headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>${tools.rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    wrapper.appendChild(table);
+    contentEl.appendChild(wrapper);
+    if (tools.note) {
+      const n = document.createElement('div');
+      n.style.cssText = 'font-family:var(--font-body);font-size:12px;color:var(--text-dim);margin-top:8px;';
+      n.textContent = tools.note;
+      contentEl.appendChild(n);
+    }
+  } else if (tools.type === 'text') {
+    const el = document.createElement('div');
+    el.style.cssText = 'font-family:var(--font-body);font-size:13px;color:var(--text-dim);line-height:1.7;white-space:pre-wrap;';
+    el.textContent = tools.content;
+    contentEl.appendChild(el);
+  }
 }
+
+function drawEpiCurve(canvas, tools) {
+  const ctx   = canvas.getContext('2d');
+  const bars  = tools.bars;
+  const W     = canvas.width;
+  const H     = canvas.height;
+  const PAD   = { top:24, right:16, bottom:56, left:44 };
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top - PAD.bottom;
+  const maxVal = Math.max(...bars.map(b=>b.count), 1);
+  const bw = chartW / bars.length;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid lines
+  const gridCount = Math.min(maxVal, 5);
+  ctx.strokeStyle = '#ddeeff';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= gridCount; i++) {
+    const y = PAD.top + chartH * (1 - i / gridCount);
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(W - PAD.right, y); ctx.stroke();
+    const label = Math.round(maxVal * i / gridCount);
+    ctx.fillStyle = '#5580a0';
+    ctx.font = '11px Share Tech Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(label, PAD.left - 5, y + 4);
+  }
+
+  // Bars
+  bars.forEach((bar, i) => {
+    const x    = PAD.left + i * bw;
+    const barH = bar.count > 0 ? ((bar.count / maxVal) * chartH) : 0;
+    const y    = PAD.top + chartH - barH;
+
+    if (bar.count > 0) {
+      ctx.fillStyle = bar.highlight ? '#0055aa' : '#5599dd';
+      ctx.fillRect(x + 2, y, bw - 4, barH);
+      ctx.strokeStyle = '#003388';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 2, y, bw - 4, barH);
+
+      // Count label above bar
+      ctx.fillStyle = '#002244';
+      ctx.font = 'bold 11px Share Tech Mono, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(bar.count, x + bw / 2, y - 4);
+    }
+
+    // X-axis label — horizontal if bars are wide enough, rotated if not
+    ctx.fillStyle = '#334466';
+    ctx.font = '10px Share Tech Mono, monospace';
+    if (bw >= 44) {
+      ctx.save();
+      ctx.translate(x + bw / 2, H - PAD.bottom + 12);
+      ctx.rotate(-Math.PI / 4);
+      ctx.textAlign = 'right';
+      ctx.fillText(bar.label, 0, 0);
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.translate(x + bw / 2, H - PAD.bottom + 8);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = 'right';
+      ctx.fillText(bar.label, 0, 0);
+      ctx.restore();
+    }
+  });
+
+  // Axis lines
+  ctx.strokeStyle = '#2255aa';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(PAD.left, PAD.top);
+  ctx.lineTo(PAD.left, H - PAD.bottom);
+  ctx.lineTo(W - PAD.right, H - PAD.bottom);
+  ctx.stroke();
+
+  // Axis labels
+  ctx.fillStyle = '#1155aa';
+  ctx.font = 'bold 11px Share Tech Mono, monospace';
+  ctx.textAlign = 'center';
+  if (tools.xlabel) ctx.fillText(tools.xlabel, W/2, H - 4);
+  if (tools.ylabel) {
+    ctx.save(); ctx.translate(13, H/2); ctx.rotate(-Math.PI/2);
+    ctx.fillText(tools.ylabel, 0, 0); ctx.restore();
+  }
+}
+
+/* ── CHOICES ───────────────────────────────────────────────── */
+
+// Fisher-Yates shuffle — returns a new shuffled array, preserving originals
+function shuffleArray(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Current question attempt counter (reset each time choices are rendered)
+let _attemptCount = 0;
+let _currentChoices = []; // shuffled choices for the current question
 
 function renderChoices(choices) {
   const panel = document.getElementById('choices-panel');
+  if (!panel) return;
   panel.innerHTML = '';
   panel.style.display = 'flex';
-  panel.style.flexDirection = 'column';
-  document.getElementById('continue-prompt').style.display = 'none';
 
-  choices.forEach((c, i) => {
+  _attemptCount = 0;
+  _currentChoices = shuffleArray(choices); // shuffle once per question
+
+  _currentChoices.forEach((choice, i) => {
     const btn = document.createElement('button');
-    btn.className = 'choice-btn pixel-box';
-    btn.innerHTML = `<span class="choice-key">[${i+1}]</span> ${c.text}`;
-    btn.addEventListener('click', () => selectChoice(choices, i));
-    btn.setAttribute('data-idx', i);
+    btn.className = 'choice-btn';
+    btn.innerHTML = `<span class="choice-key">${i+1}</span> ${choice.text}`;
+    btn.addEventListener('click', () => selectChoice(i));
     panel.appendChild(btn);
   });
 }
 
-function selectChoice(choices, idx) {
-  const choice = choices[idx];
-  // Only target buttons INSIDE the choices panel, never global .choice-btn elements
-  const panel = document.getElementById('choices-panel');
-  const buttons = panel.querySelectorAll('.choice-btn');
-  buttons.forEach((b, i) => {
-    b.disabled = true;
-    if (i === idx) {
-      b.classList.add(choice.correct ? 'correct' : 'wrong');
-    } else if (choice.correct === false && choices[i] && choices[i].correct) {
-      b.classList.add('correct');
-    }
-  });
+function selectChoice(idx) {
+  const choices = _currentChoices;
+  const choice   = choices[idx];
+  const isCorrect = choice.correct;
 
-  const fb = document.getElementById('feedback-panel');
-  const fbText = document.getElementById('feedback-text');
+  _attemptCount++;
 
-  if (choice.correct) {
+  const buttons = document.getElementById('choices-panel').querySelectorAll('.choice-btn');
+
+  if (isCorrect) {
+    // ── Correct answer ──────────────────────────────────────
+    buttons.forEach(b => b.disabled = true);
+    buttons[idx].classList.add('correct');
     playSFX('correct');
-    fb.className = 'pixel-box pixel-box-green';
-    fbText.innerHTML = `<span style="color:var(--green)">✓ CORRECT!</span><br>${choice.feedback || ''}`;
-    if (choice.xp) awardXP(choice.xp);
-  } else {
-    playSFX('wrong');
-    fb.className = 'pixel-box pixel-box-red';
-    fbText.innerHTML = `<span style="color:var(--red)">✗ INCORRECT</span><br>${choice.feedback || ''}`;
-  }
 
-  fb.style.display = 'block';
+    // XP halves with each additional attempt: full → ½ → ¼ → …
+    if (choice.xp) {
+      const earned = Math.max(1, Math.round(choice.xp / Math.pow(2, _attemptCount - 1)));
+      awardXP(earned);
+      // Annotate feedback with reduced-XP notice when not first try
+      choice._earnedXP = earned;
+    }
+    if (choice.casefile) appendCasefile(choice.casefile);
 
-  // Casefile
-  if (choice.casefile) addCasefile(choice.casefile);
+    const fb = document.getElementById('feedback-panel');
+    if (fb) {
+      fb.className = 'pixel-box';
+      fb.style.display = 'block';
+      let xpNote = '';
+      if (choice.xp && _attemptCount > 1) {
+        xpNote = ` <span style="font-size:11px;color:var(--yellow);">(+${choice._earnedXP} XP — reduced for ${_attemptCount > 2 ? 'multiple' : 'second'} try)</span>`;
+      }
+      fb.innerHTML = `<div id="feedback-text">${choice.feedback || '✓ Correct!'}${xpNote}</div>
+        <button class="continue-btn" onclick="handleContinue()">CONTINUE</button>`;
+    }
 
-  // Store the continuation so ENTER/SPACE/button can trigger it
-  STATE.pendingFeedbackNext = () => {
-    STATE.pendingFeedbackNext = null;
-    document.getElementById('feedback-panel').style.display = 'none';
-    document.getElementById('choices-panel').style.display = 'none';
     if (choice.next) {
-      const labelIdx = currentNodes.findIndex(n => n.label === choice.next);
-      if (labelIdx !== -1) STATE.nodeIndex = labelIdx;
+      const idx2 = currentNodes.findIndex(n => n.label === choice.next);
+      if (idx2 !== -1) {
+        STATE.pendingFeedbackNext = () => { STATE.nodeIndex = idx2; advanceNode(); };
+        return;
+      }
     }
-    advanceNode(choice.correct);
-  };
+    STATE.pendingFeedbackNext = () => advanceNode();
 
-  // Show a "press ENTER to continue" prompt inside the feedback panel
-  const old = fb.querySelector('.feedback-continue-prompt');
-  if (old) old.remove();
-  const cont = document.createElement('div');
-  cont.className = 'feedback-continue-prompt';
-  cont.style.cssText = 'margin-top:14px; display:flex; align-items:center; gap:12px;';
-  cont.innerHTML = `
-    <span style="font-family:var(--font-pixel);font-size:7px;color:var(--text-faint);flex:1;">Read the explanation above, then continue when ready.</span>
-    <button class="choice-btn" id="feedback-next-btn" style="padding:5px 14px;font-size:7px;border-color:var(--cyan);color:var(--cyan);pointer-events:auto;flex-shrink:0;">
-      <span class="choice-key">↩</span> CONTINUE
-    </button>
-  `;
-  fb.appendChild(cont);
-  fb.querySelector('#feedback-next-btn').addEventListener('click', () => {
-    if (STATE.pendingFeedbackNext) STATE.pendingFeedbackNext();
-  });
+  } else {
+    // ── Wrong answer — show feedback, then let them try again ─
+    buttons[idx].classList.add('wrong');
+    buttons[idx].disabled = true;  // disable only the wrong button
+    playSFX('wrong');
+
+    const remaining = Array.from(buttons).filter(b => !b.disabled).length;
+
+    const fb = document.getElementById('feedback-panel');
+    if (fb) {
+      fb.className = 'pixel-box wrong';
+      fb.style.display = 'block';
+      const retryNote = remaining > 0
+        ? `<div style="margin-top:8px;font-family:var(--font-pixel);font-size:7px;color:var(--yellow);">TRY AGAIN — correct answer earns ${Math.round(100 / Math.pow(2, _attemptCount))}% of full XP</div>`
+        : '';
+      fb.innerHTML = `<div id="feedback-text">${choice.feedback || '✗ Not quite — review the options and try again.'}</div>${retryNote}`;
+      // No CONTINUE button on wrong — player clicks another answer or (if last wrong) we auto-advance
+      if (remaining === 0) {
+        // All wrong choices exhausted — reveal correct and move on
+        buttons.forEach((b, bi) => {
+          if (choices[bi] && choices[bi].correct) b.classList.add('correct');
+        });
+        fb.innerHTML += `<button class="continue-btn" onclick="handleContinue()">CONTINUE</button>`;
+        STATE.pendingFeedbackNext = () => advanceNode();
+      }
+    }
+  }
 }
 
-// No auto-countdown — feedback stays visible until player presses ENTER/SPACE or clicks CONTINUE
-
-// ── FIELD REFERENCE DATA ───────────────────────
-// 10 agents per outbreak scenario, keyed by caseId
-const FIELD_REFERENCE = {
-  buffet: {
-    title: 'FOODBORNE ILLNESS — QUICK REFERENCE',
-    subtitle: 'Common agents in food/waterborne outbreaks',
-    agents: [
-      {
-        name: 'Staphylococcus aureus',
-        incubation: '1–6 hrs (usually 2–4)',
-        route: 'Ingestion of pre-formed toxin in food (ham, salads, dairy)',
-        symptoms: 'Abrupt nausea, vomiting, cramps; fever rare',
-        control: 'Temperature control; handwashing; exclude ill food handlers',
-        key: 'Heat-stable toxin survives cooking; toxin already present at ingestion'
-      },
-      {
-        name: 'Bacillus cereus (emetic)',
-        incubation: '0.5–6 hrs',
-        route: 'Ingestion of pre-formed toxin (rice, starchy foods)',
-        symptoms: 'Vomiting predominant; short duration',
-        control: 'Rapid cooling; do not hold cooked rice at room temp',
-        key: 'Emetic toxin heat-stable; diarrheal toxin heat-labile (8–16 hr incubation)'
-      },
-      {
-        name: 'Clostridium perfringens',
-        incubation: '6–24 hrs (usually 8–12)',
-        route: 'Ingestion; large-batch cooked meats held warm',
-        symptoms: 'Diarrhea and cramps; vomiting uncommon; self-limited',
-        control: 'Rapid cooling of large meat batches; reheat thoroughly',
-        key: 'Spores survive cooking; germinate during slow cooling'
-      },
-      {
-        name: 'Salmonella (non-typhoidal)',
-        incubation: '6–72 hrs (usually 12–36)',
-        route: 'Undercooked poultry, eggs, dairy; reptile contact',
-        symptoms: 'Diarrhea, fever, abdominal cramps; bacteremia in immunocompromised',
-        control: 'Cook poultry to 165°F; pasteurize eggs; handwashing',
-        key: 'Most common bacterial cause of foodborne illness in the US'
-      },
-      {
-        name: 'Campylobacter jejuni',
-        incubation: '2–5 days',
-        route: 'Raw/undercooked poultry, raw milk, untreated water',
-        symptoms: 'Diarrhea (often bloody), fever, cramps; Guillain-Barré risk',
-        control: 'Cook poultry thoroughly; pasteurize milk; chlorinate water',
-        key: 'Leading cause of bacterial diarrhea in US; very low infectious dose'
-      },
-      {
-        name: 'Norovirus',
-        incubation: '12–48 hrs',
-        route: 'Fecal-oral; contaminated food/water; person-to-person',
-        symptoms: 'Sudden vomiting, watery diarrhea, nausea, cramps',
-        control: 'Exclude ill workers; bleach disinfection; strict handwashing',
-        key: 'Most common cause of foodborne illness overall; extremely contagious'
-      },
-      {
-        name: 'E. coli O157:H7 (STEC)',
-        incubation: '2–8 days (usually 3–4)',
-        route: 'Undercooked ground beef, raw produce, raw milk, person-to-person',
-        symptoms: 'Bloody diarrhea; HUS in children (life-threatening)',
-        control: 'Cook beef to 160°F; avoid raw milk; notify health dept immediately',
-        key: 'Very low infectious dose; antibiotics may worsen HUS risk'
-      },
-      {
-        name: 'Listeria monocytogenes',
-        incubation: '3–70 days (median 21 days)',
-        route: 'Ready-to-eat deli meats, soft cheeses, smoked fish, raw sprouts',
-        symptoms: 'Fever, myalgias; meningitis/sepsis; miscarriage in pregnancy',
-        control: 'Refrigerate properly; avoid high-risk foods in pregnancy',
-        key: 'Grows at refrigerator temperatures; high case-fatality rate (~20%)'
-      },
-      {
-        name: 'Clostridium botulinum',
-        incubation: '12–36 hrs (range 2 hrs–8 days)',
-        route: 'Home-canned foods, honey (infants), wound infection',
-        symptoms: 'Descending paralysis, double vision, dysphagia; no fever',
-        control: 'Proper canning; do not give honey to infants <1 yr; antitoxin',
-        key: 'Toxin blocks acetylcholine; pre-formed (food) or produced in vivo'
-      },
-      {
-        name: 'Hepatitis A virus',
-        incubation: '15–50 days (mean 28)',
-        route: 'Fecal-oral; raw shellfish, produce; food handler transmission',
-        symptoms: 'Jaundice, fever, dark urine, anorexia; self-limited',
-        control: 'Vaccination; exclude ill food handlers; IG post-exposure',
-        key: 'Long incubation; food handler cases can expose hundreds'
-      }
-    ]
-  },
-  legionnaires: {
-    title: 'RESPIRATORY / ENVIRONMENTAL — QUICK REFERENCE',
-    subtitle: 'Agents causing atypical pneumonia or respiratory clusters',
-    agents: [
-      {
-        name: 'Legionella pneumophila',
-        incubation: '2–10 days (median 5–6)',
-        route: 'Inhalation of contaminated aerosols (cooling towers, hot tubs, showers)',
-        symptoms: 'Pneumonia, high fever, confusion, diarrhea; Pontiac fever = milder form',
-        control: 'Water system maintenance; hyperchlorination; ASHRAE 188 water management plans',
-        key: 'Does NOT spread person-to-person; urine antigen test for rapid Dx'
-      },
-      {
-        name: 'Mycoplasma pneumoniae',
-        incubation: '1–4 weeks (mean 2–3)',
-        route: 'Respiratory droplets; person-to-person',
-        symptoms: 'Gradual onset, dry cough, low fever; "walking pneumonia"',
-        control: 'Macrolide or tetracycline treatment; no vaccine available',
-        key: 'Community clusters common; serology or PCR for Dx'
-      },
-      {
-        name: 'Influenza A/B',
-        incubation: '1–4 days',
-        route: 'Respiratory droplets and aerosols; fomites',
-        symptoms: 'Abrupt fever, myalgia, headache, cough; complications in elderly/immunocomp',
-        control: 'Annual vaccination; antivirals (oseltamivir); droplet precautions',
-        key: 'R0 ≈ 2–3; antigenic drift/shift drives annual epidemics and pandemics'
-      },
-      {
-        name: 'SARS-CoV-2',
-        incubation: '2–14 days (median 5)',
-        route: 'Airborne and respiratory droplets; fomites (less common)',
-        symptoms: 'Fever, cough, dyspnea, anosmia; wide severity spectrum; Long COVID',
-        control: 'Vaccination; masking; ventilation; antiviral treatment (Paxlovid)',
-        key: 'R0 original ≈ 2.5; Omicron ≈ 8–15; airborne transmission key driver'
-      },
-      {
-        name: 'Coxiella burnetii (Q Fever)',
-        incubation: '2–3 weeks (range 9–40 days)',
-        route: 'Inhalation of aerosols from infected animals (cattle, sheep, goats)',
-        symptoms: 'High fever, severe headache, pneumonia, hepatitis; chronic endocarditis',
-        control: 'Avoid birthing fluids of infected animals; doxycycline treatment',
-        key: 'One of most infectious agents known; single organism can cause disease'
-      },
-      {
-        name: 'Histoplasma capsulatum',
-        incubation: '3–17 days',
-        route: 'Inhalation of spores from bird/bat droppings; soil disturbance',
-        symptoms: 'Pulmonary illness; progressive disseminated disease in immunocomp',
-        control: 'Mask/respiratory protection during demolition; antifungal treatment',
-        key: 'Construction or demolition outbreaks; endemic in Ohio/Mississippi River valleys'
-      },
-      {
-        name: 'Aspergillus fumigatus',
-        incubation: 'Days to weeks',
-        route: 'Inhalation of airborne spores from construction, soil, plants',
-        symptoms: 'Invasive aspergillosis in immunocomp; pulmonary nodules, hemoptysis',
-        control: 'HEPA filtration during construction; antifungal prophylaxis in high-risk',
-        key: 'Major opportunistic pathogen; hospital construction outbreaks documented'
-      },
-      {
-        name: 'Pontiac Fever (Legionella)',
-        incubation: '5–66 hrs (very short)',
-        route: 'Same aerosol sources as Legionnaires but higher attack rate',
-        symptoms: 'Influenza-like illness; NO pneumonia; self-resolves in 2–5 days',
-        control: 'Same environmental controls as Legionnaires disease',
-        key: 'Distinguish from Legionnaires by short incubation and lack of pneumonia'
-      },
-      {
-        name: 'Psittacosis (Chlamydia psittaci)',
-        incubation: '5–14 days',
-        route: 'Inhalation of dried secretions from infected birds (parrots, pigeons)',
-        symptoms: 'Atypical pneumonia, fever, headache; may be severe',
-        control: 'Restrict importation of exotic birds; doxycycline treatment',
-        key: 'Occupational risk for pet store workers, vets, bird handlers'
-      },
-      {
-        name: 'Hantavirus (Pulmonary Syndrome)',
-        incubation: '1–5 weeks',
-        route: 'Inhalation of rodent excreta aerosols (Sin Nombre virus in US Southwest)',
-        symptoms: 'Prodrome then rapid respiratory failure; high CFR (30–40%)',
-        control: 'Rodent control; seal structures; wet-mop rather than sweep rodent areas',
-        key: 'No person-to-person spread (US strains); New World Hantavirus'
-      }
-    ]
-  },
-  measles: {
-    title: 'VACCINE-PREVENTABLE DISEASES — QUICK REFERENCE',
-    subtitle: 'VPDs with outbreak potential; key for immunization programs',
-    agents: [
-      {
-        name: 'Measles virus (Rubeola)',
-        incubation: '7–18 days (mean 10–12 to rash)',
-        route: 'Airborne and respiratory droplets; extremely contagious (R0 12–18)',
-        symptoms: 'Prodrome: 3 Cs (cough, coryza, conjunctivitis) + Koplik spots; then rash',
-        control: '2-dose MMR (VE ~97%); isolation ×4 days after rash onset; ring vaccination',
-        key: 'Immune amnesia: measles destroys 20–70% of B-cell memory for 2–3 years'
-      },
-      {
-        name: 'Pertussis (Bordetella pertussis)',
-        incubation: '6–20 days (mean 7–10)',
-        route: 'Respiratory droplets; highly contagious (R0 12–17)',
-        symptoms: '3 stages: catarrhal → paroxysmal cough + whoop → convalescent',
-        control: 'DTaP (children), Tdap (adults/pregnancy); droplet precautions; azithromycin',
-        key: 'Vaccine immunity wanes; adults are reservoir for infant disease'
-      },
-      {
-        name: 'Mumps virus',
-        incubation: '12–25 days (mean 16–18)',
-        route: 'Respiratory droplets and saliva',
-        symptoms: 'Parotitis, fever; orchitis in post-pubertal males; aseptic meningitis',
-        control: '2-dose MMR (VE ~88%); isolate ×5 days after parotitis onset',
-        key: 'Clusters in vaccinated college students due to waning immunity'
-      },
-      {
-        name: 'Rubella virus',
-        incubation: '14–21 days',
-        route: 'Respiratory droplets',
-        symptoms: 'Mild rash illness in children; congenital rubella syndrome (CRS) is severe',
-        control: '1-dose MMR ≥97% VE; screen pregnant women; vaccinate postpartum',
-        key: 'CRS risk highest in 1st trimester: deafness, cataracts, heart defects'
-      },
-      {
-        name: 'Varicella-Zoster virus',
-        incubation: '10–21 days (mean 14–16)',
-        route: 'Airborne, respiratory droplets, direct contact with vesicles',
-        symptoms: 'Pruritic vesicular rash; fever; complications: bacterial superinfection, pneumonia',
-        control: '2-dose varicella vaccine (VE ~98% severe disease); isolate until lesions crust',
-        key: 'Reactivates as Herpes Zoster; vaccine prevents both primary and reactivation'
-      },
-      {
-        name: 'Hepatitis B virus',
-        incubation: '60–150 days (mean 90)',
-        route: 'Blood, sexual contact, perinatal; not casual contact',
-        symptoms: 'Jaundice, anorexia, nausea; chronic infection → cirrhosis/HCC',
-        control: '3-dose HepB vaccine (VE >90%); universal infant vaccination; HBIG PEP',
-        key: '~2 billion infected globally; 257 million with chronic HBV'
-      },
-      {
-        name: 'Haemophilus influenzae type b (Hib)',
-        incubation: 'Days to weeks',
-        route: 'Respiratory droplets; nasopharyngeal carriage',
-        symptoms: 'Meningitis, epiglottitis, pneumonia, septic arthritis in children <5',
-        control: 'Hib conjugate vaccine (VE >95%); rifampin prophylaxis for contacts',
-        key: 'Near-eliminated in vaccinated populations; resurgences signal coverage gaps'
-      },
-      {
-        name: 'Neisseria meningitidis',
-        incubation: '2–10 days (usually 3–4)',
-        route: 'Respiratory droplets; close prolonged contact',
-        symptoms: 'Sudden fever, stiff neck, petechial/purpuric rash; CFR 10–15% even treated',
-        control: 'MenACWY vaccine; ciprofloxacin/rifampin prophylaxis for close contacts',
-        key: 'Purpuric rash = medical emergency; prophylax household and intimate contacts'
-      },
-      {
-        name: 'Poliovirus',
-        incubation: '3–35 days (paralytic: 7–21)',
-        route: 'Fecal-oral; respiratory (minor)',
-        symptoms: '>95% asymptomatic; <1% paralytic; post-polio syndrome decades later',
-        control: 'IPV (inactivated) or OPV; 4-dose series; surveillance for acute flaccid paralysis',
-        key: 'Near-eradicated globally; vaccine-derived poliovirus (VDPV) a concern with OPV'
-      },
-      {
-        name: 'SARS-CoV-2 (COVID-19)',
-        incubation: '2–14 days (median 5)',
-        route: 'Airborne; respiratory droplets; fomites (less common)',
-        symptoms: 'Fever, cough, dyspnea, anosmia; severe: ARDS; Long COVID',
-        control: 'mRNA vaccines (VE varies by variant); antivirals; masking; ventilation',
-        key: 'Demonstrates how vaccine hesitancy drives variant emergence and excess deaths'
-      }
-    ]
-  }
-};
-
-function renderFieldReference(caseId) {
-  const ref = FIELD_REFERENCE[caseId];
-  const container = document.getElementById('fieldref-content');
-  if (!ref) {
-    container.innerHTML = '<div style="font-family:var(--font-mono);font-size:12px;color:var(--text-faint);padding:8px;">No field reference available for this case.</div>';
-    return;
-  }
-
-  container.innerHTML = '';
-
-  // Header
-  const hdr = document.createElement('div');
-  hdr.style.cssText = 'font-family:var(--font-pixel);font-size:7px;color:#bb99ff;margin-bottom:4px;';
-  hdr.textContent = ref.title;
-  container.appendChild(hdr);
-
-  const sub = document.createElement('div');
-  sub.style.cssText = 'font-family:var(--font-mono);font-size:11px;color:var(--text-faint);margin-bottom:10px;';
-  sub.textContent = ref.subtitle;
-  container.appendChild(sub);
-
-  // Agent table
-  ref.agents.forEach((agent, idx) => {
-    const card = document.createElement('div');
-    card.style.cssText = `
-      background:${idx%2===0 ? 'var(--surface)' : 'var(--surface2)'};
-      border:1px solid #443366;
-      margin-bottom:4px;
-      cursor:pointer;
-      overflow:hidden;
-    `;
-
-    const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;';
-    header.innerHTML = `
-      <span style="font-family:var(--font-pixel);font-size:7px;color:#ffcc44;min-width:16px;">${idx+1}.</span>
-      <span style="font-family:var(--font-pixel);font-size:7px;color:#bb99ff;flex:1;">${agent.name}</span>
-      <span style="font-family:var(--font-pixel);font-size:6px;color:var(--text-faint);">▼ expand</span>
-    `;
-
-    const body = document.createElement('div');
-    body.style.cssText = 'display:none;padding:6px 10px 10px;border-top:1px solid #332255;';
-    body.innerHTML = `
-      <div style="display:grid;grid-template-columns:100px 1fr;gap:4px 10px;font-family:var(--font-mono);font-size:11px;line-height:1.5;">
-        <span style="color:var(--text-faint);">Incubation</span><span style="color:var(--text);">${agent.incubation}</span>
-        <span style="color:var(--text-faint);">Route</span><span style="color:var(--text);">${agent.route}</span>
-        <span style="color:var(--text-faint);">Symptoms</span><span style="color:var(--text);">${agent.symptoms}</span>
-        <span style="color:var(--text-faint);">Control</span><span style="color:var(--green);">${agent.control}</span>
-        <span style="color:var(--text-faint);">Key fact</span><span style="color:var(--yellow);">${agent.key}</span>
-      </div>
-    `;
-
-    header.addEventListener('click', () => {
-      const isOpen = body.style.display !== 'none';
-      body.style.display = isOpen ? 'none' : 'block';
-      header.querySelector('span:last-child').textContent = isOpen ? '▼ expand' : '▲ collapse';
-    });
-
-    card.appendChild(header);
-    card.appendChild(body);
-    container.appendChild(card);
-  });
-}
-
-// Continue on ENTER/SPACE
+/* ── CONTINUE HANDLER ──────────────────────────────────────── */
 function handleContinue() {
-  if (STATE.typing) { skipTyping(); return; }
-  // If feedback is showing and we're waiting for player to continue
+  const fb = document.getElementById('feedback-panel');
+  if (fb) fb.style.display = 'none';
+
   if (STATE.pendingFeedbackNext) {
-    STATE.pendingFeedbackNext();
+    const fn = STATE.pendingFeedbackNext;
+    STATE.pendingFeedbackNext = null;
+    fn();
     return;
   }
-  const choicesVisible = document.getElementById('choices-panel').style.display !== 'none';
-  if (choicesVisible) return;
-  const continueVisible = document.getElementById('continue-prompt').style.display !== 'none';
-  if (continueVisible) advanceNode();
+  advanceNode();
 }
 
-// Keyboard shortcuts
-document.addEventListener('keydown', e => {
-  const key = e.key;
-
-  if (STATE.screen === 'title' && (key === 'Enter' || key === ' ')) {
-    startGame();
-    return;
-  }
-
-  if (STATE.screen === 'game') {
-    if (key === 'Enter' || key === ' ') {
-      handleContinue();
-      return;
-    }
-    // Number keys for choices
-    if (['1','2','3','4'].includes(key)) {
-      const idx = parseInt(key) - 1;
-      const btns = document.querySelectorAll('.choice-btn:not([disabled])');
-      if (btns[idx]) btns[idx].click();
-      return;
-    }
-    // Notebook toggle
-    if (key === 'n' || key === 'N') {
-      const cf = document.getElementById('casefile-panel');
-      const nowHidden = cf.style.display !== 'none';
-      STATE.casefileUserVisible = !nowHidden;
-      cf.style.display = nowHidden ? 'none' : 'block';
-      return;
-    }
-    // Field Reference toggle
-    if (key === 'r' || key === 'R') {
-      const fp = document.getElementById('fieldref-panel');
-      const isHidden = fp.style.display === 'none';
-      if (isHidden) {
-        renderFieldReference(STATE.currentCase);
-        fp.style.display = 'block';
-      } else {
-        fp.style.display = 'none';
-      }
-      return;
-    }
-    // Data panel toggle
-    if (key === 'd' || key === 'D') {
-      const tp = document.getElementById('tools-panel');
-      const toolsContent = document.getElementById('tools-content');
-      // Only toggle if there is data loaded
-      if (toolsContent && toolsContent.children.length > 0) {
-        const nowHidden = tp.style.display !== 'none';
-        STATE.toolsUserHidden = nowHidden;
-        tp.style.display = nowHidden ? 'none' : 'flex';
-      }
-      return;
-    }
-  }
-
-  // Rankup screen: Enter advances to case select
-  if (STATE.screen === 'rankup' && (key === 'Enter' || key === ' ')) {
-    playSFX('click');
-    showOutbreakSelect();
-    return;
-  }
-
-  // Victory screen: Enter restarts
-  if (STATE.screen === 'victory' && (key === 'Enter' || key === ' ')) {
-    resetGame();
-    return;
-  }
-
-  if (key === 'm' || key === 'M') toggleMute();
-});
-
-// Click title screen
-document.getElementById('title-screen').addEventListener('click', () => {
-  if (STATE.screen === 'title') startGame();
-});
-
-function startGame() {
-  playSFX('click');
-  startBGMusic();
-  showOutbreakSelect();
-}
-
-function startCase(caseId) {
-  playSFX('click');
-  loadCase(caseId);
-}
-
+/* ── COMPLETE CASE ─────────────────────────────────────────── */
 function completeCase() {
   if (!STATE.casesCompleted.includes(STATE.currentCase)) {
     STATE.casesCompleted.push(STATE.currentCase);
   }
 
-  const xpMap = { buffet: 150, legionnaires: 250, measles: 400 };
+  const xpMap = { buffet: 150, pruno: 150, legionnaires: 250, measles: 400 };
   const bonus = xpMap[STATE.currentCase] || 100;
   const ranked = awardXP(bonus);
 
-  playSFX('fanfare');
-
-  if (STATE.casesCompleted.length >= 3) {
-    showVictory();
-  } else if (ranked) {
+  if (ranked) {
     showRankUp();
   } else {
     showOutbreakSelect();
@@ -1274,686 +805,774 @@ function completeCase() {
 
 function showRankUp() {
   const rank = RANKS[STATE.rank];
-  document.getElementById('rankup-title').textContent = rank.name;
-  document.getElementById('rankup-title').style.color = rank.color;
-  document.getElementById('rankup-title').style.textShadow = `0 0 16px ${rank.color}`;
-  document.getElementById('rankup-rank').textContent = `You've been promoted to: ${rank.name}`;
-  document.getElementById('rankup-rank').style.color = rank.color;
-
-  const msgs = {
-    1: 'You\'ve proven you can handle a foodborne outbreak. Your systematic approach and knowledge of attack rates impressed the team. Ready for more complex investigations.',
-    2: 'Environmental epidemiology is no easy task. Your ability to identify Legionella in a complex urban setting shows real detective skill.',
-    3: 'Navigating vaccine hesitancy while investigating a measles outbreak takes both scientific rigor and communication skills. You\'re on your way to the top.',
-    4: 'All three cases solved. The Director herself has taken notice. Welcome to the elite tier of disease detectives.',
-  };
-  document.getElementById('rankup-msg').textContent = msgs[STATE.rank] || 'Outstanding work, Detective.';
-
-  playSFX('rankup');
+  document.getElementById('rankup-title').textContent = 'RANK UP!';
+  document.getElementById('rankup-rank').textContent  = rank.name;
+  document.getElementById('rankup-msg').textContent   = rank.msg;
   showScreen('rankup-screen');
   STATE.screen = 'rankup';
-}
-
-function showVictory() {
-  showScreen('victory-screen');
-  STATE.screen = 'victory';
-  document.getElementById('victory-text').innerHTML = `
-You have successfully investigated all three outbreaks, mastering the core tools of field epidemiology:
-<br><br>
-🍽 Foodborne outbreak → Attack rates, 2×2 tables, food-specific relative risks<br>
-🏨 Legionnaires' disease → Epi curves, incubation periods, environmental source tracing<br>
-💉 Measles/vaccine hesitancy → R₀, herd immunity, risk communication, vaccine safety data
-<br><br>
-These are the tools real epidemiologists use every day to protect the public's health.
-  `;
-  document.getElementById('final-score').textContent = `FINAL SCORE: ${STATE.score} XP | RANK: ${RANKS[STATE.rank].name}`;
-  playSFX('fanfare');
-  STATE.screen = 'victory';
+  playSFX('rankup');
 }
 
 function resetGame() {
-  STATE.screen = 'title';
+  STATE.screen = 'select';
   STATE.currentCase = null;
   STATE.nodeIndex = 0;
-  STATE.score = 0;
-  STATE.xp = 0;
-  STATE.rank = 0;
+  STATE.score = 0; STATE.xp = 0;
   STATE.casesCompleted = [];
-  STATE.casefileEntries = [];
+  STATE.rank = 0;
+  STATE.casefileText = '';
+  STATE.pendingFeedbackNext = null;
   updateHUD();
-  ['case-legionnaires','case-measles'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.classList.add('locked');
-      el.classList.remove('unlocked','completed');
+  showOutbreakSelect();
+}
+
+/* ── KEYBOARD HANDLER ──────────────────────────────────────── */
+document.addEventListener('keydown', e => {
+  const key = e.key;
+
+  if (STATE.screen === 'select') {
+    const MAP = { '1':'buffet', '2':'pruno', '3':'legionnaires', '4':'measles' };
+    if (MAP[key]) { e.preventDefault(); tryStartCase(MAP[key]); }
+    return;
+  }
+
+  if (STATE.screen === 'rankup') {
+    if (key === 'Enter' || key === ' ') { e.preventDefault(); showOutbreakSelect(); }
+    return;
+  }
+  if (STATE.screen === 'victory') {
+    if (key === 'Enter' || key === ' ') { e.preventDefault(); resetGame(); }
+    return;
+  }
+
+  if (STATE.screen === 'game') {
+    if (key === 'Enter' || key === ' ') {
+      e.preventDefault();
+      const promptEl = document.getElementById('continue-prompt');
+      if (promptEl && promptEl.style.display !== 'none') {
+        handleContinue();
+      }
+      return;
     }
-  });
-  document.getElementById('case-legionnaires-status').textContent = '🔒 LOCKED';
-  document.getElementById('case-legionnaires-status').style.color = 'var(--text-faint)';
-  document.getElementById('case-measles-status').textContent = '🔒 LOCKED';
-  document.getElementById('case-measles-status').style.color = 'var(--text-faint)';
 
-  showScreen('title-screen');
-  drawStars();
-}
+    if (/^[1-4]$/.test(key)) {
+      const idx = parseInt(key) - 1;
+      const btns = document.querySelectorAll('#choices-panel .choice-btn:not([disabled])');
+      if (btns[idx]) { e.preventDefault(); btns[idx].click(); }
+      return;
+    }
 
-// ── TOOLS RENDERER ─────────────────────────────
-function renderTools(toolsData) {
-  const container = document.getElementById('tools-content');
-  container.innerHTML = '';
+    if (key === 'n' || key === 'N') {
+      if (typeof togglePanel === 'function') { togglePanel('casefile-panel'); }
+      else {
+        const cf = document.getElementById('casefile-panel');
+        const nowVisible = window.getComputedStyle(cf).display !== 'none';
+        cf.style.display = nowVisible ? 'none' : 'block';
+      }
+      return;
+    }
 
-  if (toolsData.type === 'epicurve') {
-    renderEpiCurve(container, toolsData);
-  } else if (toolsData.type === 'twobytwo') {
-    renderTwoByTwo(container, toolsData);
-  } else if (toolsData.type === 'table') {
-    renderDataTable(container, toolsData);
-  } else if (toolsData.type === 'text') {
-    const div = document.createElement('div');
-    div.style.fontFamily = 'var(--font-mono)';
-    div.style.fontSize = '13px';
-    div.style.lineHeight = '1.7';
-    div.style.color = 'var(--text-dim)';
-    div.innerHTML = toolsData.content;
-    container.appendChild(div);
+    if (key === 'r' || key === 'R') {
+      if (typeof togglePanel === 'function') { togglePanel('fieldref-panel'); return; }
+      const fp = document.getElementById('fieldref-panel');
+      const isHidden = window.getComputedStyle(fp).display === 'none';
+      if (isHidden) {
+        renderFieldReference(STATE.currentCase);
+        fp.style.display = 'block';
+      } else {
+        fp.style.display = 'none';
+      }
+      return;
+    }
+
+    if (key === 'd' || key === 'D') {
+      if (typeof togglePanel === 'function') { togglePanel('tools-panel'); return; }
+      const tp = document.getElementById('tools-panel');
+      STATE.toolsUserHidden = window.getComputedStyle(tp).display !== 'none';
+      tp.style.display = STATE.toolsUserHidden ? 'none' : 'flex';
+      return;
+    }
   }
-}
+});
 
-function renderEpiCurve(container, data) {
-  const title = document.createElement('div');
-  title.style.fontFamily = 'var(--font-pixel)';
-  title.style.fontSize = '7px';
-  title.style.color = 'var(--yellow)';
-  title.style.textAlign = 'center';
-  title.style.marginBottom = '8px';
-  title.textContent = data.title || 'EPIDEMIC CURVE';
-  container.appendChild(title);
+/* ── LEGACY COMPAT ──────────────────────────────────────────── */
+function startCase(id) { tryStartCase(id); }
 
-  const canvas = document.createElement('canvas');
-  canvas.width = 680;
-  canvas.height = 120;
-  canvas.style.maxWidth = '100%';
-  canvas.style.display = 'block';
-  canvas.style.margin = '0 auto';
-  canvas.style.imageRendering = 'pixelated';
-  container.appendChild(canvas);
+/* ── WINDOW LOAD ───────────────────────────────────────────── */
+window.addEventListener('load', () => {
+  updateHUD();
+  showOutbreakSelect();   // skip title — go straight to case select
 
-  const ctx = canvas.getContext('2d');
-  const bars = data.bars;
-  const maxVal = Math.max(...bars.map(b => b.count));
-  const barW = Math.floor((canvas.width - 80) / bars.length) - 4;
-  const chartH = 90;
-  const offsetX = 50;
-  const offsetY = 10;
-
-  // Axes
-  ctx.strokeStyle = '#4488ff';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(offsetX, offsetY);
-  ctx.lineTo(offsetX, offsetY + chartH);
-  ctx.lineTo(offsetX + (barW + 4) * bars.length + 20, offsetY + chartH);
-  ctx.stroke();
-
-  // Y labels
-  ctx.fillStyle = '#8888cc';
-  ctx.font = '10px Share Tech Mono, monospace';
-  ctx.textAlign = 'right';
-  for (let i = 0; i <= 4; i++) {
-    const val = Math.round((maxVal * i) / 4);
-    const yPos = offsetY + chartH - (chartH * i) / 4;
-    ctx.fillText(val, offsetX - 4, yPos + 4);
-    ctx.strokeStyle = '#222244';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(offsetX, yPos);
-    ctx.lineTo(offsetX + (barW + 4) * bars.length + 20, yPos);
-    ctx.stroke();
-  }
-
-  // Bars
-  bars.forEach((b, i) => {
-    const bh = Math.round((b.count / maxVal) * chartH);
-    const bx = offsetX + 4 + i * (barW + 4);
-    const by = offsetY + chartH - bh;
-
-    // Bar color: cases vs. normal
-    const color = b.color || (b.type === 'peak' ? '#ff2244' : b.type === 'early' ? '#ff8800' : '#4488ff');
-    ctx.fillStyle = color;
-    ctx.fillRect(bx, by, barW, bh);
-
-    // Label
-    ctx.fillStyle = '#8888cc';
-    ctx.font = '9px Share Tech Mono, monospace';
-    ctx.textAlign = 'center';
-    ctx.save();
-    ctx.translate(bx + barW/2, offsetY + chartH + 14);
-    ctx.rotate(-0.6);
-    ctx.fillText(b.label, 0, 0);
-    ctx.restore();
+  document.getElementById('rankup-continue-btn').addEventListener('click', () => {
+    playSFX('click');
+    showOutbreakSelect();
   });
-
-  // Legend
-  if (data.legend) {
-    const leg = document.createElement('div');
-    leg.style.cssText = 'display:flex;gap:16px;justify-content:center;margin-top:6px;font-family:Share Tech Mono,monospace;font-size:11px;';
-    data.legend.forEach(l => {
-      leg.innerHTML += `<span style="color:${l.color}">■ ${l.label}</span>`;
-    });
-    container.appendChild(leg);
-  }
-
-  // Analysis note
-  if (data.note) {
-    const note = document.createElement('div');
-    note.style.cssText = 'font-family:Share Tech Mono,monospace;font-size:12px;color:var(--cyan);text-align:center;margin-top:8px;padding:6px;border:1px solid var(--cyan);background:rgba(0,229,255,0.05);';
-    note.textContent = '▸ ' + data.note;
-    container.appendChild(note);
-  }
-}
-
-function renderTwoByTwo(container, data) {
-  const title = document.createElement('div');
-  title.style.cssText = 'font-family:var(--font-pixel);font-size:7px;color:var(--yellow);text-align:center;margin-bottom:8px;';
-  title.textContent = data.title || '2×2 CONTINGENCY TABLE';
-  container.appendChild(title);
-
-  const grid = document.createElement('div');
-  grid.className = 'two-by-two';
-  grid.style.cssText = 'display:grid;grid-template-columns:130px 1fr 1fr 1fr;gap:2px;font-family:Share Tech Mono,monospace;font-size:12px;background:var(--bg);padding:2px;max-width:520px;margin:0 auto;';
-
-  const headers = ['', data.exposed_label || 'EXPOSED', data.unexposed_label || 'UNEXPOSED', 'TOTAL'];
-  const rows = [
-    [data.case_label || 'CASES', data.a, data.b, data.a + data.b],
-    [data.control_label || 'NON-CASES', data.c, data.d, data.c + data.d],
-    ['TOTAL', data.a + data.c, data.b + data.d, data.a + data.b + data.c + data.d],
-  ];
-
-  const allCells = [headers, ...rows];
-  allCells.forEach((row, ri) => {
-    row.forEach((cell, ci) => {
-      const div = document.createElement('div');
-      div.style.cssText = `background:${ri===0||ci===0?'var(--surface)':'var(--surface2)'};padding:6px 8px;text-align:center;border:1px solid var(--border);color:${ri===0||ci===0?'var(--cyan)':'var(--text)'};font-family:${ri===0||ci===0?'var(--font-pixel)':'Share Tech Mono,monospace'};font-size:${ri===0||ci===0?'7px':'13px'};`;
-      if (ri===1&&ci===1) div.style.background = 'rgba(57,255,20,0.1)';
-      if (ri===1&&ci===2) div.style.background = 'rgba(255,34,68,0.1)';
-      div.textContent = cell;
-      grid.appendChild(div);
-    });
+  document.getElementById('victory-restart-btn').addEventListener('click', () => {
+    playSFX('click');
+    resetGame();
   });
-  container.appendChild(grid);
-
-  // Calculated stats
-  if (data.showStats) {
-    const rr = ((data.a / (data.a + data.b)) / (data.c / (data.c + data.d))).toFixed(2);
-    const or = ((data.a * data.d) / (data.b * data.c)).toFixed(2);
-    const arE = ((data.a / (data.a + data.b)) * 100).toFixed(1);
-    const arU = ((data.c / (data.c + data.d)) * 100).toFixed(1);
-
-    const stats = document.createElement('div');
-    stats.style.cssText = 'font-family:Share Tech Mono,monospace;font-size:12px;margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px;max-width:520px;margin:10px auto 0;';
-    stats.innerHTML = `
-      <div style="padding:6px;background:var(--surface2);border:1px solid var(--border);">Attack Rate (Exposed): <span style="color:var(--yellow)">${arE}%</span></div>
-      <div style="padding:6px;background:var(--surface2);border:1px solid var(--border);">Attack Rate (Unexposed): <span style="color:var(--yellow)">${arU}%</span></div>
-      <div style="padding:6px;background:var(--surface2);border:1px solid var(--border);">Risk Ratio (RR): <span style="color:var(--cyan)">${rr}</span></div>
-      <div style="padding:6px;background:var(--surface2);border:1px solid var(--border);">Odds Ratio (OR): <span style="color:var(--cyan)">${or}</span></div>
-    `;
-    container.appendChild(stats);
-  }
-}
-
-function renderDataTable(container, data) {
-  const title = document.createElement('div');
-  title.style.cssText = 'font-family:var(--font-pixel);font-size:7px;color:var(--yellow);text-align:center;margin-bottom:8px;';
-  title.textContent = data.title || 'DATA TABLE';
-  container.appendChild(title);
-
-  const table = document.createElement('table');
-  table.style.cssText = 'border-collapse:collapse;width:100%;font-family:Share Tech Mono,monospace;font-size:12px;';
-
-  const thead = document.createElement('thead');
-  const headerRow = document.createElement('tr');
-  data.headers.forEach(h => {
-    const th = document.createElement('th');
-    th.style.cssText = 'padding:6px 10px;border:1px solid var(--border);background:var(--surface);color:var(--cyan);font-family:var(--font-pixel);font-size:7px;text-align:left;';
-    th.textContent = h;
-    headerRow.appendChild(th);
-  });
-  thead.appendChild(headerRow);
-  table.appendChild(thead);
-
-  const tbody = document.createElement('tbody');
-  data.rows.forEach((row, ri) => {
-    const tr = document.createElement('tr');
-    row.forEach((cell, ci) => {
-      const td = document.createElement('td');
-      td.style.cssText = `padding:5px 10px;border:1px solid var(--border);background:${ri%2===0?'var(--surface2)':'var(--surface)'};color:${cell.highlight?'var(--yellow)':'var(--text-dim)'};`;
-      td.textContent = typeof cell === 'object' ? cell.value : cell;
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
-  });
-  table.appendChild(tbody);
-  container.appendChild(table);
-}
+});
 
 /* ============================================================
-   ██████╗ █████╗ ███████╗███████╗    ██████╗
-  ██╔════╝██╔══██╗██╔════╝██╔════╝   ██╔══██╗
-  ██║     ███████║███████╗█████╗     ██████╔╝
-  ██║     ██╔══██║╚════██║██╔══╝     ╚════██╗
-  ╚██████╗██║  ██║███████║███████╗   ██████╔╝
-   ╚═════╝╚═╝  ╚═╝╚══════╝╚══════╝  ╚═════╝
-  CASE 1: THE BANQUET INCIDENT (Easy — Foodborne)
+   CASE DATA
    ============================================================ */
 
+/* ── CASE 1: THE BANQUET INCIDENT (Foodborne, Easy) ─────────── */
 const CASE_BUFFET = [
   {
-    speaker: 'DISPATCH — PUBLIC HEALTH DEPT.',
-    boxStyle: 'pixel-box-cyan',
-    text: `ALERT: Multiple illness reports following the Riverside Corp buffet lunch (12:00 PM). 34 attendees. First cases reported at 6:00 PM. Symptoms: nausea, vomiting, diarrhea, abdominal cramps.\n\nYou are the on-call Disease Investigator. Respond immediately.`,
+    speaker: 'DISPATCH',
     scene: 'buffet',
-    casefile: 'Received report: 34 attendees, onset 6 hrs post-meal, GI symptoms',
+    text: `OUTBREAK ALERT — Tuesday, 11:43 AM\n\nThe Riverside Convention Center is reporting 22 ill attendees from a corporate luncheon held this morning. The reports describe sudden-onset nausea, vomiting, and diarrhea beginning 2–4 hours after the meal.\n\nYou have been assigned as lead investigator. Report to the scene.`,
+    casefile: 'CASE OPENED: Mass illness event, Riverside Convention Center. 22 reports, 2–4 h onset.',
   },
   {
-    speaker: 'YOU — ROOKIE INVESTIGATOR',
-    text: `This looks like a foodborne outbreak. My first instinct is to define the case and collect data. I need to know: What did people eat? Who got sick? What's the timing?\n\nTime to set up an outbreak investigation.`,
-    casefile: 'Investigation initiated. Analyzing exposure data.',
+    speaker: 'EVENT COORDINATOR — MS. REYES',
+    scene: 'buffet',
+    text: `Thank goodness you're here. We had 34 attendees at the buffet luncheon. The menu included:\n\n• Chicken Caesar salad\n• Pasta salad with shrimp\n• Fruit platter\n• Bread rolls\n• Chicken marsala\n\nAll foods were prepared this morning and held in warming trays for about 2 hours before service.`,
+    casefile: 'Menu: chicken Caesar salad, pasta/shrimp salad, fruit, rolls, chicken marsala. 34 total attendees.',
+  },
+
+  /* ── CHAPTER: CLINICAL PRESENTATION ── */
+  {
+    speaker: 'EMERGENCY DEPARTMENT — DR. PATEL',
+    scene: 'buffet',
+    boxStyle: 'pixel-box-yellow',
+    text: `We've received 14 patients so far. Here's what we're seeing:\n\nSigns and symptoms (most to least common):\n• Diarrhea (watery, non-bloody) — 13/14 patients\n• Nausea — 12/14\n• Vomiting — 10/14\n• Stomach cramps — 9/14\n• Low-grade fever (< 38.5°C / 101.3°F) — 4/14\n\nOnset: 2–4 hours after the meal. Most patients are already improving. No one is critically ill.`,
+    casefile: 'Clinical: diarrhea, nausea, vomiting, cramps. Short onset (2–4 h). Mild/self-limited.',
   },
   {
-    speaker: 'HEALTH OFFICER',
-    boxStyle: 'pixel-box-cyan',
-    text: `Good. Before you head out, review your basic epidemiology. The investigation follows the standard steps:\n\n1. Verify the diagnosis\n2. Establish the existence of an outbreak\n3. Define and identify cases\n4. Describe data (person, place, time)\n5. Develop hypotheses\n6. Evaluate hypotheses\n7. Implement control measures`,
-    casefile: '10-step outbreak investigation framework noted.',
-  },
-  {
-    speaker: 'MENTOR',
+    speaker: 'MENTOR — DR. OKAFOR',
     boxStyle: 'pixel-box',
-    text: `Quick question before you go — what type of epidemic pattern are you likely dealing with here, given that 34 people ate the same lunch and all got sick around the same time?`,
+    text: `Before running the lab work, use the clinical picture to narrow down the likely pathogen. Which of the following agents best matches this presentation: rapid onset (2–4 hours), vomiting and diarrhea, mild or no fever, and likely related to a catered meal?`,
     choices: [
       {
-        text: 'Propagated (person-to-person) outbreak — cases spreading over time',
-        correct: false,
-        feedback: 'Not quite. A propagated outbreak shows a slow, sustained increase over multiple generations. This is different — all exposures happened at one event at one time.',
-        casefile: 'Q1 INCORRECT: Not a propagated outbreak.',
-      },
-      {
-        text: 'Point-source outbreak — single exposure event, cases cluster in time',
+        text: 'Staphylococcus aureus or another toxin-producing organism — short incubation and prominent vomiting point to a preformed toxin',
         correct: true,
-        xp: 20,
-        feedback: 'Exactly right! A point-source outbreak occurs when all cases are exposed to the same source at approximately the same time. The epidemic curve will show a sharp peak followed by rapid decline. Classic foodborne pattern.',
-        casefile: 'Q1 ✓ Point-source outbreak confirmed. Single shared meal = single exposure event.',
+        xp: 40,
+        feedback: '✓ Right! A 2–4 hour onset with vomiting as a key feature strongly suggests a preformed toxin — either Staph aureus (1–6 h) or Bacillus cereus emetic form (1–6 h). Toxin-mediated illness is fast because the toxin is already in the food; there\'s no waiting for bacteria to multiply in the gut. Lab confirmation will narrow it down further.',
+        casefile: 'Clinical impression: preformed toxin etiology likely (short onset, vomiting-dominant, mild fever).',
       },
       {
-        text: 'Endemic — the disease is always present in this population',
+        text: 'Clostridium botulinum — the neurological symptoms are a giveaway',
         correct: false,
-        feedback: 'Endemic refers to a baseline level of disease in a population over time. This is an acute cluster, not endemic disease.',
+        feedback: '✗ Botulism causes descending paralysis, double vision, and difficulty swallowing — not the vomiting and diarrhea described here. The incubation period also ranges from 12 hours to 10 days, not 2–4 hours. There are no neurological symptoms in this cluster.',
       },
       {
-        text: 'Pandemic — widespread global transmission',
+        text: 'Hepatitis A — this matches the jaundice and liver symptoms from shellfish exposure',
         correct: false,
-        feedback: 'A pandemic involves worldwide spread. This is a localized cluster at a single event.',
+        feedback: '✗ Hepatitis A has an incubation period of 15–50 days and causes jaundice, dark urine, and elevated liver enzymes — not acute vomiting and diarrhea within hours. Also, no jaundice was described here. The shrimp in the pasta salad could be a concern for Hepatitis A in a different scenario, but the clinical picture here doesn\'t fit.',
+      },
+      {
+        text: 'Legionella pneumophila — the shared food exposure and respiratory symptoms suggest Legionnaires\' disease',
+        correct: false,
+        feedback: '✗ Legionella causes pneumonia (severe respiratory illness) with a 2–10 day incubation period — not vomiting and diarrhea within hours of a meal. Legionella is also not foodborne; it spreads through inhaling contaminated water aerosols (cooling towers, HVAC).',
       },
     ],
   },
+
+  /* ── CHAPTER: EPI DATA & 2×2 ── */
   {
-    speaker: 'FIELD TEAM',
-    text: `We've collected food history from all 34 attendees. Here's what people ate at the buffet. Look at the data carefully...`,
+    speaker: 'FIELD EPIDEMIOLOGIST',
+    scene: 'buffet',
+    text: `We've completed interviews with 30 of the 34 attendees. I'm showing the 2×2 table for the chicken Caesar salad now.\n\nStudy the table carefully — it will help you figure out which food was most likely the source.`,
     tools: {
-      type: 'table',
-      title: 'FOOD-SPECIFIC ATTACK RATES',
-      headers: ['Food Item', 'Ill / Ate', 'Attack Rate (Ate)', 'Ill / Didn\'t Eat', 'Attack Rate (Not)', 'Risk Ratio'],
-      rows: [
-        ['Chicken Salad', '22/24', {value:'91.7%', highlight:true}, '2/10', '20.0%', {value:'4.58', highlight:true}],
-        ['Caesar Salad',  '14/18', '77.8%', '10/16', '62.5%', '1.24'],
-        ['Dinner Roll',   '18/28', '64.3%', '6/6',   '100%',  '0.64'],
-        ['Shrimp Cocktail','16/20','80.0%', '8/14',  '57.1%', '1.40'],
-        ['Chocolate Cake', '12/18','66.7%', '12/16', '75.0%', '0.89'],
-      ],
+      type: 'twobytwo',
+      title: 'CHICKEN CAESAR SALAD — 2×2 TABLE',
+      data: { a: 16, b: 2, c: 5, d: 7 },
+      note: 'Ate the salad: 18 people total. Did NOT eat the salad: 12 people total.',
     },
-    casefile: 'Food-specific attack rates calculated. Chicken salad: AR=91.7%, RR=4.58',
+    casefile: 'Food-specific attack rates calculated. Chicken Caesar salad appears highest risk.',
   },
   {
-    speaker: 'YOU — ROOKIE INVESTIGATOR',
-    text: `I need to identify the food vehicle. Looking at this data... one item stands out. Which food item is the most likely source of this outbreak?`,
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Let's make sure you can calculate the risk ratio (RR) from this 2×2 table. The RR tells us how many times more likely people who ate the food were to get sick compared to people who didn't eat it.\n\nAttack rate in exposed   = a ÷ (a + b)\nAttack rate in unexposed = c ÷ (c + d)\nRR = Attack rate (exposed) ÷ Attack rate (unexposed)`,
     keepTools: true,
     choices: [
       {
-        text: 'Caesar Salad — high attack rate of 77.8%',
-        correct: false,
-        feedback: 'The Caesar salad has a high absolute attack rate, but look at those who DIDN\'T eat it — 62.5% also got sick. The Risk Ratio is only 1.24, suggesting the salad is not the driver.',
-      },
-      {
-        text: 'Chicken Salad — AR of 91.7%, Risk Ratio of 4.58, and only 20% of non-eaters got sick',
+        text: 'RR = 16/18 ÷ 5/12 = 88.9% ÷ 41.7% ≈ 2.1',
         correct: true,
-        xp: 30,
-        feedback: 'Perfect analysis! The chicken salad has: (1) the highest attack rate among eaters (91.7%), (2) the highest risk ratio (4.58), and critically (3) a very LOW attack rate among non-eaters (20%). Eating chicken salad makes you 4.6× more likely to get sick. This is our vehicle.',
-        casefile: 'Q2 ✓ VEHICLE IDENTIFIED: Chicken salad (RR=4.58). Collecting samples for lab.',
+        xp: 50,
+        feedback: '✓ Correct! AR(exposed) = 16 ÷ 18 = 88.9%. AR(unexposed) = 5 ÷ 12 = 41.7%. RR = 88.9 ÷ 41.7 ≈ 2.1. People who ate the Caesar salad were about 2 times more likely to get sick. That\'s a meaningful association.',
+        casefile: 'RR for Caesar salad = 2.1 (exposed AR 88.9% vs. unexposed AR 41.7%).',
       },
       {
-        text: 'Shrimp Cocktail — 80% attack rate among eaters',
+        text: 'RR = 16 ÷ 5 = 3.2 — just divide the case counts',
         correct: false,
-        feedback: 'High absolute attack rate, but 57.1% of non-eaters also got sick. The RR is only 1.40. Compare this to the chicken salad where non-eaters had only 20% attack rate.',
+        feedback: '✗ The RR is calculated from attack rates (proportions), not from raw counts. You must divide the number of cases by the total number of people in each exposure group first: AR(exposed) = 16 ÷ 18; AR(unexposed) = 5 ÷ 12.',
       },
       {
-        text: 'Dinner Roll — most people ate it',
+        text: 'RR = (16 × 7) ÷ (2 × 5) = 11.2 — that\'s the cross-product formula',
         correct: false,
-        feedback: 'The dinner roll actually has a protective-looking pattern — those who ate it had a LOWER attack rate than non-eaters. RR < 1. Not the culprit.',
+        feedback: '✗ The formula (a × d) ÷ (b × c) gives you the Odds Ratio (OR), not the Risk Ratio (RR). Both are useful, but RR is the standard measure in cohort-style outbreak investigations like this one. The OR is more commonly used in case-control studies.',
+      },
+      {
+        text: 'RR = 5/12 ÷ 16/18 = 0.47 — unexposed divided by exposed',
+        correct: false,
+        feedback: '✗ You\'ve calculated the inverse — unexposed ÷ exposed. The RR should always be AR(exposed) ÷ AR(unexposed) so that an RR > 1 means exposure increases risk. Your answer (0.47) would mean the exposed group was actually protected, which is the opposite of what we observe.',
       },
     ],
+  },
+  {
+    speaker: 'ENVIRONMENTAL HEALTH',
+    scene: 'buffet_kitchen',
+    text: `We inspected the kitchen. The Caesar salad dressing was made on-site using raw eggs. The temperature log shows the fully dressed salad sat at room temperature for nearly 3 hours before service — well above the safe 2-hour limit.\n\nStool samples from 3 ill attendees have been sent to the state lab.`,
+    casefile: 'Kitchen inspection: raw-egg Caesar dressing. Salad held at room temp 3 h. Samples sent to state lab.',
   },
   {
     speaker: 'LAB SCIENTIST',
     boxStyle: 'pixel-box-yellow',
-    text: `Lab results in! We cultured the chicken salad sample. Positive for Staphylococcus aureus. Toxin-producing strain confirmed.\n\nS. aureus produces a heat-stable enterotoxin. Onset typically 1-6 hours after consumption. This fits perfectly.`,
     scene: 'lab',
-    casefile: 'LAB: S. aureus toxin confirmed in chicken salad. Heat-stable enterotoxin.',
-  },
-  {
-    speaker: 'MENTOR',
-    boxStyle: 'pixel-box',
-    text: `Good. Now, the kitchen manager says the chicken salad was made fresh that morning but sat at room temperature for 3 hours before service. This question will test your knowledge of the incubation period...`,
-  },
-  {
-    speaker: 'MENTOR',
-    boxStyle: 'pixel-box',
-    text: `The lunch was served at 12:00 PM. The first cases called the health department at 6:00 PM. The median onset time is 5 hours after eating.\n\nFor Staphylococcal food poisoning, what is the typical incubation period?`,
-    choices: [
-      {
-        text: '30 minutes to 8 hours (usually 2-4 hours)',
-        correct: true,
-        xp: 20,
-        feedback: 'Correct! S. aureus enterotoxin causes rapid-onset illness, typically 1-6 hours (range 30 min to 8 hrs). The 5-hour onset here is consistent. This is a PRE-FORMED toxin illness — the bacteria already made the toxin in the food before it was eaten.',
-        casefile: 'Q3 ✓ S. aureus incubation: 1-6 hrs confirmed. Pre-formed toxin mechanism.',
-      },
-      {
-        text: '12 to 36 hours',
-        correct: false,
-        feedback: 'That\'s more typical of Salmonella or Norovirus. S. aureus toxin causes much faster onset because the toxin is ALREADY in the food when consumed — no need for the bacteria to colonize and grow.',
-      },
-      {
-        text: '3 to 7 days',
-        correct: false,
-        feedback: 'That long an incubation would suggest an invasive pathogen like Listeria or Hepatitis A. S. aureus causes rapid illness within hours due to its pre-formed heat-stable toxin.',
-      },
-      {
-        text: '2 to 3 weeks',
-        correct: false,
-        feedback: 'That incubation period suggests something like Hepatitis A, Typhoid, or Listeria. S. aureus is among the fastest-onset foodborne pathogens.',
-      },
-    ],
-  },
-  {
-    speaker: 'HEALTH OFFICER',
-    boxStyle: 'pixel-box-cyan',
-    text: `Now construct the 2×2 table for the chicken salad exposure. This is the core analytic tool in cohort-style outbreak investigations.`,
+    text: `Lab results are back.\n\nStool cultures: POSITIVE for Salmonella Enteritidis in 2 of 3 samples.\n\nSalmonella Enteritidis is commonly linked to raw eggs and poultry. Its incubation period is 6–72 hours — consistent with the 2–4 hour onset in this cluster.`,
     tools: {
-      type: 'twobytwo',
-      title: '2×2 TABLE — CHICKEN SALAD vs. ILLNESS',
-      exposed_label: 'ATE CHICKEN SALAD',
-      unexposed_label: 'DID NOT EAT',
-      case_label: 'ILL',
-      control_label: 'NOT ILL',
-      a: 22, b: 2, c: 2, d: 8,
-      showStats: true,
+      type: 'table',
+      title: 'ATTACK RATES BY FOOD ITEM',
+      headers: ['Food Item','Ate — Ill','Ate — Well','Did Not Eat — Ill','Did Not Eat — Well','AR (Exposed)','AR (Unexposed)','RR'],
+      rows: [
+        ['Caesar Salad','16','2','5','7','88.9%','41.7%','2.1'],
+        ['Pasta/Shrimp','10','8','11','1','55.6%','91.7%','0.6'],
+        ['Fruit Platter','8','9','13','0','47.1%','100%','0.5'],
+        ['Chicken Marsala','9','8','12','1','52.9%','92.3%','0.6'],
+        ['Bread Rolls','7','9','14','0','43.8%','100%','0.4'],
+      ],
     },
-    casefile: '2×2 table complete: RR=4.59, OR=44.0. Strong association confirmed.',
+    casefile: 'LAB CONFIRMED: Salmonella Enteritidis in 2/3 stool samples. Caesar salad highest RR = 2.1.',
   },
   {
-    speaker: 'MENTOR',
+    speaker: 'MENTOR — DR. OKAFOR',
     boxStyle: 'pixel-box',
-    text: `Look at that 2×2 table. The Odds Ratio is 44.0 and the Risk Ratio is 4.59. Since this is a cohort study design (you know the total population at risk), which measure is more appropriate to report?`,
-    keepTools: true,
-    choices: [
-      {
-        text: 'Odds Ratio (OR) — it\'s always the best measure in epidemiology',
-        correct: false,
-        feedback: 'The OR is excellent for case-control studies, but when you have a defined cohort where you can calculate true proportions of people who got sick, the Risk Ratio (or Attack Rate Ratio) is the preferred measure.',
-      },
-      {
-        text: 'Risk Ratio (Relative Risk) — appropriate because we have a defined cohort with known denominators',
-        correct: true,
-        xp: 25,
-        feedback: 'Excellent! In a cohort study (or outbreak investigation with a defined at-risk population), you can directly calculate incidence in exposed vs. unexposed. The RR is the direct measure of effect. The OR approximates RR when the outcome is rare, but here we can calculate it directly.',
-        casefile: 'Q4 ✓ RR = preferred measure in cohort/outbreak design with known denominators.',
-      },
-      {
-        text: 'Neither — we need a p-value to determine if this is significant',
-        correct: false,
-        feedback: 'P-values complement effect measures but don\'t replace them. With an RR of 4.59 and 34 subjects, this association is both statistically significant and epidemiologically meaningful. Always report both point estimates and p-values/confidence intervals.',
-      },
-      {
-        text: 'Attributable Risk — the difference in attack rates between exposed and unexposed',
-        correct: false,
-        feedback: 'Attributable Risk (AR = 91.7% - 20.0% = 71.7%) is informative, but the question asks which relative measure is more appropriate given the study design. In cohort studies, Risk Ratio is the standard relative measure.',
-      },
-    ],
-  },
-  {
-    speaker: 'HEALTH OFFICER',
-    boxStyle: 'pixel-box-cyan',
-    text: `Outstanding work, Detective. Here's the full epi curve of the outbreak timeline. Note the classic point-source pattern.`,
+    text: `Now look at the epidemic curve — the timing of symptom onset for all 26 cases. What type of outbreak pattern does this represent?`,
     tools: {
       type: 'epicurve',
-      title: 'EPIDEMIC CURVE — BANQUET OUTBREAK',
+      title: 'EPI CURVE — RIVERSIDE LUNCHEON (hour of symptom onset)',
       bars: [
-        {label:'12-1pm', count:0, type:'early'},
-        {label:'1-2pm',  count:0, type:'early'},
-        {label:'2-3pm',  count:0, type:'early'},
-        {label:'3-4pm',  count:1, type:'early', color:'#ff8800'},
-        {label:'4-5pm',  count:3, type:'early', color:'#ff8800'},
-        {label:'5-6pm',  count:8, type:'peak',  color:'#ff2244'},
-        {label:'6-7pm',  count:12,type:'peak',  color:'#ff2244'},
-        {label:'7-8pm',  count:7, type:'peak',  color:'#ff4466'},
-        {label:'8-9pm',  count:3, type:'late',  color:'#ff6688'},
-        {label:'9-10pm', count:0, type:'late'},
+        {label:'10 AM',count:0},{label:'11 AM',count:0},{label:'12 PM',count:1},
+        {label:'1 PM',count:3},{label:'2 PM',count:8,highlight:true},{label:'3 PM',count:7,highlight:true},
+        {label:'4 PM',count:4},{label:'5 PM',count:2},{label:'6 PM',count:1},
+        {label:'7 PM',count:0},
       ],
-      legend: [{color:'#ff2244',label:'Peak cases'},{color:'#ff8800',label:'Early onset'},{color:'#4488ff',label:'No cases'}],
+      xlabel: 'Hour of Symptom Onset',
+      ylabel: 'Cases',
     },
-    casefile: 'Epi curve received. Analyze the shape and peak timing.',
+    casefile: 'Epi curve: peak at 2–4 PM, 2–4 h after noon meal. Classic point-source shape.',
   },
   {
-    speaker: 'YOU — ROOKIE INVESTIGATOR',
-    text: `Study the epi curve carefully. All cases ate the same meal at noon.\n\nWhat's the mode and median incubation period based on this curve?`,
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
     keepTools: true,
+    text: `The epi curve shows cases tightly clustered 2–4 hours after the noon meal, with a single sharp peak. What does this pattern tell you about the outbreak?`,
     choices: [
       {
-        text: 'Mode: 6-7 hours (peak bar) | Median: approximately 6 hours',
+        text: 'Point-source outbreak — everyone was exposed to the same contaminated food at one time and place',
         correct: true,
-        xp: 20,
-        feedback: 'Correct! The mode is the most common value — the tallest bar in the epi curve, which is the 6-7 PM bar (12 cases), representing 6-7 hours post-exposure. The median can be estimated by finding the midpoint of all cases. This is how you read an epi curve to characterize the outbreak.',
-        casefile: 'Q5 ✓ Mode incubation: 6-7 hrs. Median ~6 hrs. Consistent with S. aureus.',
+        xp: 50,
+        feedback: '✓ Correct! The single sharp peak with all cases occurring within approximately one incubation period is the classic shape of a point-source outbreak. All cases shared a common exposure at one event (the buffet). There is no evidence of person-to-person spread.',
+        casefile: 'Epi curve pattern: point-source. Consistent with a single buffet exposure event.',
       },
       {
-        text: 'Mode: 5-6 hours | Median: approximately 4 hours',
+        text: 'Propagated outbreak — the virus is spreading from person to person in multiple waves',
         correct: false,
-        feedback: 'Close, but the mode is the peak of the curve. Count the cases: 5-6pm has 8, 6-7pm has 12. The 6-7pm bar is the mode. The median requires finding the value that splits all cases 50/50, which falls around 6 hours.',
+        feedback: '✗ A propagated outbreak would show multiple waves of cases, each wave about one incubation period apart, as each case infects new people. This curve has only one peak — the classic sign of a point-source event where everyone was exposed at the same time.',
       },
       {
-        text: 'We cannot determine this from an epi curve',
+        text: 'Continuous common source — people are being exposed to the contaminated food over several days',
         correct: false,
-        feedback: 'Actually, the epi curve is specifically designed for this purpose. The mode is the tallest bar. The median requires calculating cumulative cases. This is one of the primary uses of epidemic curves in outbreak investigation.',
+        feedback: '✗ A continuous common source produces a prolonged plateau or gradual rise and fall over multiple incubation periods. This cluster peaked and resolved entirely within a few hours of a single meal.',
       },
       {
-        text: 'The epi curve shows cases by person, not time, so incubation cannot be determined',
+        text: 'Mixed outbreak — an initial point-source event followed by person-to-person spread',
         correct: false,
-        feedback: 'An epidemic curve plots cases on the Y-axis against TIME on the X-axis. Time is what makes epi curves so powerful for determining incubation periods and outbreak type.',
+        feedback: '✗ A mixed pattern would show an initial peak followed by a secondary rise one incubation period later. There is no secondary wave here — just a single tight cluster from one shared meal.',
+      },
+    ],
+  },
+
+  /* ── CHAPTER: PUBLIC HEALTH RECOMMENDATIONS ── */
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    scene: 'press',
+    text: `Great investigative work. Before we close this case, there is one more step that separates a good epidemiologist from an outstanding one: issuing clear, actionable public health recommendations.\n\nEffective recommendations follow a simple principle from WHO communications guidance. Start with the most important message first — your Single Overarching Communications Outcome (SOCO). Who needs to change their behavior, and exactly what change do you want to see?\n\nYou will issue two sets of recommendations: one to the Convention Center management, and one to the public.`,
+    casefile: 'Step: Issuing public health recommendations to facility and public.',
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Your SOCO for the Convention Center is: "Management immediately implements safe food-handling practices so that no future attendees become ill from a preventable foodborne illness."\n\nWhich recommendation to the Convention Center is MOST critical to prevent a repeat outbreak?`,
+    choices: [
+      {
+        text: 'Eliminate the use of raw eggs in dressings served to large groups, and require all perishable foods to stay at safe temperatures (below 40°F / 4°C or above 140°F / 60°C) — never left in the temperature danger zone for more than 2 hours',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Right. This recommendation directly addresses the two contributing factors you identified: the raw-egg dressing (source of Salmonella) and improper temperature control (the environment that allowed bacteria to multiply). Good public health recommendations are specific, actionable, and linked directly to the evidence — consistent with the WHO principle of "Clarify the message" and "Call to action." A recommendation without a clear action step is just commentary.',
+        casefile: 'Rec to facility: no raw eggs in large-group foods; maintain temperature control (below 40°F or above 140°F); max 2 hours in danger zone.',
+      },
+      {
+        text: 'Hire a new catering company — the current caterers are clearly incompetent and should not be trusted with food safety',
+        correct: false,
+        feedback: '✗ Blaming individuals without addressing the system is neither evidence-based nor effective. Public health recommendations should target the conditions that allowed the outbreak — temperature control failure and use of raw eggs — not assign blame. A new catering company with the same practices would have the same outcome.',
+      },
+      {
+        text: 'Post a notice saying "Eat at your own risk" at the buffet entrance so guests are warned',
+        correct: false,
+        feedback: '✗ This shifts the burden entirely onto guests and does nothing to reduce the hazard. Effective public health communication — per WHO guidance — must communicate a benefit and include a real call to action that prevents harm. A warning sign without a control measure fails both criteria.',
+      },
+      {
+        text: 'Cancel all future buffet-style events indefinitely',
+        correct: false,
+        feedback: '✗ This is disproportionate. The outbreak was caused by specific, correctable food-handling failures — not by the concept of buffet service. Recommendations should be targeted and realistic. An overly broad recommendation will not be followed and damages trust with the facility.',
       },
     ],
   },
   {
-    speaker: 'HEALTH OFFICER',
-    boxStyle: 'pixel-box-cyan',
-    scene: 'press',
-    text: `Case closed! Your findings:\n\n• VEHICLE: Chicken salad (S. aureus)\n• SOURCE: Improper temperature control (3 hrs at room temp)\n• ATTACK RATE: 70.6% overall (24/34 attendees)\n• CONTROL: Catering company notified, food handling retrained\n\nYou've solved your first outbreak. Well done, Detective!`,
-    xp: 150,
-    casefile: 'CASE CLOSED: Chicken salad (S. aureus). Attack rate 70.6%. Control measures implemented.',
-  },
-];
-
-/* ============================================================
-   CASE 2: CITY CENTER CLUSTER — LEGIONNAIRES' DISEASE
-   ============================================================ */
-
-const CASE_LEGIONNAIRES = [
-  {
-    speaker: 'DISPATCH — SURVEILLANCE UNIT',
-    boxStyle: 'pixel-box-cyan',
-    scene: 'legionnaires',
-    text: `ALERT: Cluster of severe pneumonia cases identified in the downtown district. 7 cases in the past 3 weeks, all requiring hospitalization. Age range: 45-78. Legionella pneumophila suspected.\n\nThis is not your average food poisoning. Legionnaires' disease requires environmental investigation. You're up, Detective.`,
-    casefile: 'CASE 2 OPEN: Legionnaires\' disease cluster, downtown district, 7 cases, 3 weeks.',
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Now for the public communication. Your SOCO for the public is: "Attendees who are still symptomatic seek appropriate care, and the broader community understands what safe food handling looks like so they can protect themselves at home and at events."\n\nWhich element is MOST important to include in a public statement about this outbreak?`,
+    choices: [
+      {
+        text: 'A clear call to action: symptomatic attendees should seek care if symptoms persist beyond 72 hours, and everyone should know the temperature danger zone (40°F–140°F / 4°C–60°C) for home food safety',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Correct. WHO\'s 7 Cs of public health communication require a "Call to action" — all public health communications MUST include a verb and a specific step the audience can take. Telling people exactly when to see a doctor AND giving them a practical takeaway for their own kitchens addresses both the immediate situation and the longer-term goal. It also "Communicates a benefit" (protecting yourself and your family) and "Caters to both HEART and HEAD" — acknowledging worry while providing factual guidance.',
+        casefile: 'Public rec: seek care if symptoms persist >72h; temperature danger zone 40–140°F; avoid raw eggs in high-risk populations.',
+      },
+      {
+        text: 'Name the Convention Center and caterer in a press release so the public can decide whether to patronize them in the future',
+        correct: false,
+        feedback: '✗ Publicly naming facilities before corrective action is taken can destroy a business without improving safety — and may expose the health department to legal liability. WHO guidance emphasizes "Creating trust" through transparent, evidence-based communication. Naming and shaming without actionable guidance is not the same as transparency.',
+      },
+      {
+        text: 'Reassure the public that all salmonellosis cases resolve on their own and no medical attention is ever needed',
+        correct: false,
+        feedback: '✗ This is medically inaccurate and potentially dangerous. While most healthy adults recover without treatment, Salmonella can cause serious complications (bacteremia, sepsis) in infants, the elderly, and immunocompromised individuals. Effective public health communications must be accurate and acknowledge risk — especially for vulnerable populations.',
+      },
+      {
+        text: 'Advise everyone to completely avoid eating out for the next 30 days',
+        correct: false,
+        feedback: '✗ This is disproportionate and inconsistent with the evidence. The outbreak was linked to a single event and a specific set of food-handling failures — not to eating out in general. WHO guidance stresses "Consistency counts": advice must be proportionate to the risk and supported by evidence. Disproportionate advice erodes public trust.',
+      },
+    ],
   },
   {
     speaker: 'HEALTH DIRECTOR',
     boxStyle: 'pixel-box-cyan',
-    text: `Before we dive in — Legionnaires' disease has a long incubation period compared to foodborne illness. This changes how we construct the epidemic curve and trace the source.\n\nWhat is the incubation period for Legionella pneumophila?`,
+    scene: 'press',
+    text: `Outstanding work, Detective. You correctly identified:\n\n• The most likely vehicle (Caesar salad with raw-egg dressing)\n• The causative agent (Salmonella Enteritidis)\n• The contributing factor (improper temperature control)\n• The outbreak pattern (point-source)\n\nRecommendations have been issued to the Convention Center. Case closed.`,
+    xp: 150,
+    casefile: 'CASE 1 CLOSED. Vehicle: Caesar salad. Agent: Salmonella Enteritidis. Point-source. Recommendations issued.',
+  },
+];
+
+/* ── CASE 2: THE PRUNO INCIDENT (Botulism, Easy) ─────────────
+   Based on:
+   • MMWR 2012;61:782–4 (Utah 2011)
+   • MMWR 2017;65:1491–2 (Mississippi 2016)
+   • Yasmin et al., J Correct Health Care 2015;21:327–334 (Arizona 2012)
+   ─────────────────────────────────────────────────────────── */
+const CASE_PRUNO = [
+  {
+    speaker: 'DISPATCH',
+    scene: 'pruno_prison',
+    text: `OUTBREAK ALERT — Thursday, 8:22 AM\n\nThe State Correctional Facility is reporting 5 inmates with a sudden, serious neurological illness — double vision, difficulty swallowing, progressive weakness, and trouble breathing. All five are in the same maximum-security housing unit (Pod B).\n\nYou have been dispatched. Activate the botulism protocol.`,
+    casefile: 'CASE OPENED: Acute neurological illness, 5 inmates, state correctional facility, Pod B. Botulism protocol activated.',
+  },
+
+  /* ── CHAPTER: CLINICAL PRESENTATION ── */
+  {
+    speaker: 'PRISON MEDICAL OFFICER — DR. VASQUEZ',
+    scene: 'pruno_inmates_sick',
+    boxStyle: 'pixel-box-yellow',
+    text: `We have 5 symptomatic inmates, all in Pod B. Here is what they're presenting with:\n\nSigns and symptoms (all 5 patients):\n• Double or blurred vision (diplopia) — 5/5\n• Drooping eyelids (ptosis) — 5/5\n• Slurred speech (dysarthria) — 4/5\n• Difficulty swallowing (dysphagia) — 4/5\n• Progressive weakness starting in the face/neck and moving downward — 5/5\n• NO fever in any patient\n\nThree are deteriorating rapidly. We suspect botulism.`,
+    casefile: 'Symptoms: diplopia, ptosis, dysarthria, dysphagia, descending weakness, NO fever. Pod B. Onset 12–36 h.',
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `The clinical picture points strongly toward botulism. Which feature best distinguishes foodborne botulism from other neurological emergencies like meningitis or Guillain-Barré syndrome?`,
     choices: [
       {
-        text: '1-6 hours (like S. aureus toxin)',
-        correct: false,
-        feedback: 'That\'s the S. aureus toxin range. Legionella requires bacterial replication in the lung — it takes much longer to cause disease.',
-      },
-      {
-        text: '2-10 days (usually 5-6 days)',
+        text: 'Descending (top-down) flaccid paralysis starting in cranial nerves, WITH NO FEVER — botulism characteristically starts at the head and moves downward',
         correct: true,
-        xp: 25,
-        feedback: 'Correct! Legionella has an incubation period of 2-10 days, with a median of 5-6 days. This is critical for exposure tracing — when a patient presents with pneumonia, you need to look back up to 10 days to identify potential exposures.',
-        casefile: 'Q1 ✓ Legionella incubation: 2-10 days (median 5-6). Must trace 10 days back.',
+        xp: 40,
+        feedback: '✓ Correct! The classic triad of botulism is: (1) descending flaccid paralysis starting with cranial nerve palsies (diplopia, ptosis, dysphagia), (2) absence of fever (botulism is a toxin — not an active infection), and (3) an alert, oriented patient despite severe motor weakness. Meningitis causes fever and neck stiffness. Guillain-Barré usually ascends (starts in the legs) and follows a respiratory infection.',
+        casefile: 'Clinical: descending flaccid paralysis + cranial nerve palsies + NO fever = classic foodborne botulism.',
       },
       {
-        text: '2-3 weeks',
+        text: 'High fever (above 39°C) and neck stiffness — these are the hallmarks of botulism in adults',
         correct: false,
-        feedback: 'Too long. A 2-3 week incubation would suggest something like Hepatitis A or measles. Legionella causes illness within 2-10 days of exposure.',
+        feedback: '✗ High fever and neck stiffness are hallmarks of bacterial meningitis, not botulism. Botulism is caused by a toxin (not a live bacterial infection in the body), so there is characteristically NO fever. This is one of the key distinguishing features.',
       },
       {
-        text: '12-24 hours',
+        text: 'Ascending weakness starting in the legs — typical of botulism spreading upward',
         correct: false,
-        feedback: 'That\'s more in the range of Norovirus or some bacterial toxin-mediated illnesses. Legionella needs several days to cause pneumonia.',
+        feedback: '✗ Ascending weakness (starting in the legs and moving upward) is the hallmark of Guillain-Barré syndrome, not botulism. Botulism moves in the OPPOSITE direction — descending from the cranial nerves (affecting vision and swallowing first) down to the limbs and respiratory muscles.',
+      },
+      {
+        text: 'Severe bloody diarrhea and abdominal pain — the gastrointestinal symptoms are what set botulism apart',
+        correct: false,
+        feedback: '✗ Bloody diarrhea and abdominal pain suggest an intestinal infection (like Shigella or E. coli O157:H7), not botulism. While some botulism patients have mild constipation or nausea early on, the defining feature is the neurological paralysis — not GI bleeding.',
       },
     ],
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Three patients are showing signs of respiratory compromise. What is the most critical immediate action for a botulism patient who is having trouble breathing?`,
+    choices: [
+      {
+        text: 'Secure the airway and prepare for mechanical ventilation — respiratory muscle paralysis is the primary cause of death in botulism',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Correct! Respiratory failure from paralysis of the breathing muscles is the main cause of death in botulism. Securing the airway and supporting breathing (mechanical ventilation if needed) is the top priority. The specific treatment — Heptavalent Botulinum Antitoxin (HBAT) — must be requested from the CDC Strategic National Stockpile and given as soon as possible.',
+        casefile: 'Priority: airway management and mechanical ventilation. HBAT requested from CDC Strategic National Stockpile.',
+      },
+      {
+        text: 'Start broad-spectrum antibiotics right away to kill the bacteria',
+        correct: false,
+        feedback: '✗ Antibiotics are not the treatment for foodborne botulism because the illness is caused by a preformed toxin (not an active bacterial infection in the body). Antibiotics do not neutralize the toxin that is already blocking nerve signals. The correct treatment is HBAT (antitoxin) plus supportive care.',
+      },
+      {
+        text: 'Isolate all patients immediately — botulism is extremely contagious between people',
+        correct: false,
+        feedback: '✗ Foodborne botulism is NOT contagious from person to person. Patients got sick from eating the same toxin-containing food, not from each other. Standard isolation is not needed. The priority is respiratory support.',
+      },
+      {
+        text: 'Perform a lumbar puncture (spinal tap) to rule out bacterial meningitis first',
+        correct: false,
+        feedback: '✗ The clinical picture here — descending flaccid paralysis, cranial nerve palsies, and NO fever — is classic for botulism, not meningitis. Meningitis causes fever, neck stiffness (nuchal rigidity), and headache. In a patient with botulism who is losing the ability to breathe, securing the airway takes priority over diagnostic testing.',
+      },
+    ],
+  },
+
+  /* ── CHAPTER: EPIDEMIOLOGIC INVESTIGATION ── */
+  {
+    speaker: 'FIELD EPIDEMIOLOGIST',
+    scene: 'pruno_interviews',
+    text: `We interviewed all 5 ill inmates and 8 other inmates in Pod B who were not sick. All 5 ill inmates reported drinking "pruno" — a homemade alcoholic drink made in a plastic bag — on November 23. None of the 8 well inmates drank it.\n\nThe pruno was reportedly made with oranges, sugar, bread, water, and a baked potato that was saved from a meal tray about 3 weeks earlier.`,
+    casefile: 'All 5 ill inmates drank pruno on Nov 23. 0 of 8 well inmates drank pruno. Potato is key suspect ingredient.',
+    tools: {
+      type: 'twobytwo',
+      title: 'PRUNO CONSUMPTION — 2×2 TABLE (Pod B)',
+      data: { a: 5, b: 0, c: 0, d: 8 },
+      note: 'Drank pruno: 5 ill, 0 well. Did NOT drink pruno: 0 ill, 8 well. Attack rate among exposed = 100%.',
+    },
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    keepTools: true,
+    text: `The data show a 100% attack rate among those who drank pruno and 0% among those who didn't. What is the most accurate way to describe the strength of this epidemiologic finding, and what are its limits?`,
+    choices: [
+      {
+        text: 'The risk ratio (RR) is mathematically undefined (because you can\'t divide by zero), but the perfect separation — 100% ill among exposed, 0% ill among unexposed — is the strongest possible epidemiologic signal linking pruno to the illness',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Correct! When the attack rate in the unexposed group is 0%, the RR formula (AR exposed ÷ AR unexposed) requires dividing by zero, which is undefined. But perfect separation like this is actually very compelling — it is hard to imagine a more complete association. Combined with laboratory confirmation and biological plausibility, this is strong evidence.',
+        casefile: 'RR undefined (0% in unexposed). Perfect exposure-illness separation. Pruno is the vehicle.',
+      },
+      {
+        text: 'The odds ratio (OR) is infinite, which statistically proves that pruno caused the botulism',
+        correct: false,
+        feedback: '✗ You\'re on the right track about the OR being infinite (a×d ÷ b×c = 5×8 ÷ 0×0 = ∞). However, no single statistic "proves" causation in epidemiology. Epidemiologic evidence establishes association and supports causal inference — but cause is established by combining statistical findings, laboratory confirmation, biological plausibility, and other criteria (Bradford Hill criteria).',
+      },
+      {
+        text: 'A p-value less than 0.05 proves the pruno caused the illness',
+        correct: false,
+        feedback: '✗ Statistical significance (a low p-value) tells you how likely the association is due to chance — it does NOT prove causation. A p-value says nothing about the direction of causation, confounding, or bias. Causal inference in epidemiology requires additional criteria (temporal relationship, biological plausibility, dose-response, etc.).',
+      },
+      {
+        text: 'With only 13 people in the study, the sample size is too small to draw any conclusions',
+        correct: false,
+        feedback: '✗ Small sample sizes do reduce statistical precision, but perfect separation (5/5 vs 0/8) still provides meaningful evidence — especially when supported by laboratory confirmation and a consistent pattern across multiple independent outbreaks. All confirmed prison botulism outbreaks in the US have involved pruno.',
+      },
+    ],
+  },
+
+  /* ── CHAPTER: LAB RESULTS ── */
+  {
+    speaker: 'LAB SCIENTIST',
+    boxStyle: 'pixel-box-yellow',
+    scene: 'pruno_lab',
+    text: `Results from the CDC Botulism Laboratory:\n\nPatient serum (collected before antitoxin was given): POSITIVE for botulinum toxin type A in 4 of 5 specimens.\n\nConfiscated pruno sample: C. botulinum DETECTED; botulinum toxin type A CONFIRMED by both mass spectrometry and mouse bioassay.\n\nFinal diagnosis: CONFIRMED FOODBORNE BOTULISM — Type A.`,
+    casefile: 'LAB CONFIRMED: Botulinum toxin type A in 4/5 patient sera and in pruno. Mass spec + mouse bioassay positive.',
+    tools: {
+      type: 'epicurve',
+      title: 'EPI CURVE — HOURS FROM PRUNO CONSUMPTION TO SYMPTOM ONSET',
+      bars: [
+        {label:'< 12h',count:1},{label:'12–24h',count:1,highlight:true},{label:'24–36h',count:2,highlight:true},
+        {label:'36–48h',count:1},{label:'48–60h',count:0},{label:'60–72h',count:0},
+        {label:'> 72h',count:0},
+      ],
+      xlabel: 'Hours from Exposure to Symptom Onset',
+      ylabel: 'Cases',
+    },
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    keepTools: true,
+    text: `The median incubation period is about 29 hours (range: under 12 to 48 hours), which matches published botulism data.\n\nWhy is a baked potato in the pruno the most likely source of C. botulinum spores?`,
+    choices: [
+      {
+        text: 'Root vegetables like potatoes carry C. botulinum spores from soil. Inside the sealed plastic bag — anaerobic (no oxygen), warm, and low-acid — those spores germinated and produced toxin.',
+        correct: true,
+        xp: 50,
+        feedback: '✓ Correct! C. botulinum is a soil organism, and root vegetables commonly carry its spores on their skin. The sealed pruno bag creates the perfect conditions for toxin production: (1) no oxygen (anaerobic), (2) warm temperature, (3) low acidity from the fruit and sugar mix. Every confirmed prison botulism outbreak in the US literature has involved potatoes in the pruno recipe.',
+        casefile: 'Source: potato spores + anaerobic warm pruno bag. Classic conditions for C. botulinum toxin production confirmed.',
+      },
+      {
+        text: 'Potatoes naturally contain a botulinum precursor compound that becomes active when fermented',
+        correct: false,
+        feedback: '✗ Potatoes do not contain any botulinum precursor. The risk from potatoes is that their skin carries C. botulinum SPORES from soil. When those spores are placed in an anaerobic, warm, low-acid environment (like a sealed pruno bag), they germinate and produce toxin.',
+      },
+      {
+        text: 'The plastic commissary bags used for fermentation were contaminated with the toxin',
+        correct: false,
+        feedback: '✗ All evidence from prison botulism outbreak investigations consistently points to the potato as the source of spores — not the bags. C. botulinum spores are widespread in soil and on the surfaces of root vegetables, making the potato the critical ingredient.',
+      },
+      {
+        text: 'Any fermentation in an airtight plastic bag always produces botulinum toxin',
+        correct: false,
+        feedback: '✗ Fermentation does not always produce botulinum toxin. The key requirements are: (1) C. botulinum spores must be present, (2) the environment must be anaerobic, (3) conditions must allow germination (low acid, low sugar at the right stage, warm temperature). Most pruno batches never cause botulism — only those that include a potato (which introduces spores) under permissive conditions.',
+      },
+    ],
+  },
+  {
+    speaker: 'PRISON MEDICAL OFFICER — DR. VASQUEZ',
+    scene: 'pruno_antitoxin',
+    text: `CDC has released the Heptavalent Botulinum Antitoxin (HBAT) from the Strategic National Stockpile. All 5 patients received it within 24 hours of hospitalization.\n\nPatient outcomes:\n• 3 patients required mechanical ventilation\n• 2 patients did not need intubation\n• All 5 survived\n\nAverage ICU stay: 4 days. Several patients had lingering weakness at follow-up.`,
+    casefile: 'Treatment: HBAT given to all 5. 3 mechanically ventilated. All survived. Residual weakness at follow-up.',
+    tools: {
+      type: 'table',
+      title: 'PATIENT OUTCOMES',
+      headers: ['Patient','Intubated?','ICU Days','HBAT Given?','Outcome'],
+      rows: [
+        ['#1 (Index)','Yes','8','Yes','Discharged — weakness at 1 month'],
+        ['#2','Yes','12','Yes','Discharged — residual double vision'],
+        ['#3','Yes','5','Yes','Discharged — resolved'],
+        ['#4','No','3','Yes','Discharged — resolved'],
+        ['#5','No','2','Yes','Discharged — resolved'],
+      ],
+    },
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Three patients had prolonged illness requiring weeks of recovery. What is the biological mechanism that explains why botulism paralysis takes so long to recover from?`,
+    choices: [
+      {
+        text: 'Botulinum toxin cuts (cleaves) SNARE proteins at the neuromuscular junction, permanently blocking the release of acetylcholine (ACh). Recovery requires the nerve to grow new terminals — a process that takes weeks to months.',
+        correct: true,
+        xp: 50,
+        feedback: '✓ Correct! Botulinum toxin is a zinc metalloprotease (a protein-cutting enzyme) that cleaves SNARE proteins (like VAMP/synaptobrevin). SNARE proteins are essential for the nerve terminal to release acetylcholine (ACh) into the neuromuscular junction. Without ACh release, the muscle cannot receive the signal to contract — producing flaccid (floppy) paralysis. Recovery requires axonal sprouting: the nerve must grow new synaptic terminals to replace the damaged ones, which takes weeks to months.',
+        casefile: 'Mechanism: SNARE protein cleavage → ACh blockade at NMJ → descending flaccid paralysis. Recovery via axonal sprouting.',
+      },
+      {
+        text: 'Botulinum toxin blocks sodium channels in the nerve, so action potentials cannot travel down the nerve fiber',
+        correct: false,
+        feedback: '✗ Blocking sodium channels (as tetrodotoxin and saxitoxin do) would stop action potentials from traveling along the nerve. Botulinum toxin acts further downstream: the action potential arrives at the nerve terminal normally, but the SNARE proteins needed to release acetylcholine have been destroyed, so no neurotransmitter is released.',
+      },
+      {
+        text: 'Botulinum toxin works like tetanus toxin — it blocks inhibitory neurons, causing the muscles to stay permanently contracted (spastic paralysis)',
+        correct: false,
+        feedback: '✗ Tetanus toxin (tetanospasmin) blocks inhibitory interneurons in the spinal cord, causing spastic (rigid) paralysis. Botulinum toxin does the OPPOSITE: it blocks the release of acetylcholine at the neuromuscular junction, causing flaccid (floppy) paralysis. An easy way to remember the difference: tetanus = stiff/contracted; botulism = floppy/paralyzed.',
+      },
+      {
+        text: 'Botulinum toxin directly destroys muscle fibers, leaving permanent scar tissue',
+        correct: false,
+        feedback: '✗ Botulinum toxin does not directly damage muscle tissue. The muscles themselves are intact — they simply cannot receive the signal to contract because acetylcholine release from the nerve has been blocked. This is why recovery is possible once the nerve regenerates new terminals, though it is a slow process.',
+      },
+    ],
+  },
+
+  /* ── CHAPTER: PUBLIC HEALTH RECOMMENDATIONS ── */
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    scene: 'pruno_press',
+    text: `Excellent clinical and epidemiological work. Now comes a critical — and often overlooked — part of every outbreak investigation: formulating and communicating public health recommendations.\n\nFor a prison botulism outbreak, you have two distinct audiences with very different communication needs: correctional facility administrators and the broader public health and corrections community. Using the WHO framework, always start by defining your Single Overarching Communications Outcome (SOCO): who needs to change their behavior, and what change do you want to see?`,
+    casefile: 'Step: Issuing recommendations to correctional facility and public.',
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Your SOCO for the correctional facility is: "Facility administrators immediately implement pruno prevention and food-safety protocols so that no future inmates are harmed by this entirely preventable illness."\n\nWhich facility-level recommendation is the MOST essential?`,
+    choices: [
+      {
+        text: 'Implement a zero-tolerance pruno suppression program: confiscate ingredients (especially potatoes and other root vegetables from meal trays), train correctional officers to recognize signs of fermentation, and report any suspected pruno immediately to the medical unit',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Correct. Every confirmed prison botulism outbreak in the U.S. has involved pruno containing a root vegetable (almost always potato) as the C. botulinum spore source. The only reliable prevention is stopping pruno production. WHO\'s 7 Cs require a clear "Call to action" — the verb here is "confiscate, train, and report." The recommendation is specific, actionable, and directly tied to the epidemiological evidence. It also addresses the root cause rather than just the symptoms.',
+        casefile: 'Rec to facility: zero-tolerance pruno suppression; confiscate root vegetables from meal trays; train officers to recognize fermentation signs; immediate medical reporting.',
+      },
+      {
+        text: 'Punish the inmates who made the pruno with extended solitary confinement — deterrence is the most effective prevention strategy',
+        correct: false,
+        feedback: '✗ Punitive approaches without addressing the underlying conditions (availability of fermenting ingredients, lack of other recreational substances, overcrowding) have not been shown to prevent prison brewing. Public health approaches focus on modifying the environment — removing the means — rather than simply punishing individuals. Punishment-only strategies also fail the WHO principle of "Communicating a benefit": there is no clear benefit to the overall facility health.',
+      },
+      {
+        text: 'Issue a memo telling inmates that pruno is dangerous and they should stop making it',
+        correct: false,
+        feedback: '✗ A memo without environmental intervention (removing ingredients, training staff) is unlikely to be effective. Effective public health messaging must go beyond information alone — behavior change requires modifying the environment. WHO guidance on communicating risk emphasizes that knowledge alone rarely changes behavior; structural changes are needed.',
+      },
+      {
+        text: 'Install video cameras in all cell blocks to monitor for pruno production',
+        correct: false,
+        feedback: '✗ Surveillance alone does not remove the hazard. Cameras may deter some production but do not address the availability of fermenting materials. The evidence-based recommendation is to eliminate the key ingredient (root vegetables left over from meal trays) — that is the structural intervention most directly supported by the outbreak literature.',
+      },
+    ],
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Now for the broader public communication — your audience is correctional health professionals across the country. Your SOCO: "Corrections health professionals nationwide recognize botulism from pruno as a known, preventable risk and implement evidence-based prevention protocols."\n\nWhich statement BEST reflects effective public health communication for this event?`,
+    choices: [
+      {
+        text: 'Issue a health advisory to correctional facilities nationally: describe the clinical presentation of botulism (descending paralysis, NO fever, cranial nerve signs), explain that pruno containing root vegetables is the vehicle, and include specific prevention steps — with a clear call to action for facilities to review their food-service and contraband policies',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Correct. This recommendation demonstrates all 7 Cs of public health communication: it Commands attention (life-threatening illness), Clarifies the message (clinical signs and vehicle), Communicates a benefit (prevent future deaths), maintains Consistency with the evidence, Caters to both HEART (inmates\' lives at stake) and HEAD (clinical facts), Creates trust (evidence-based, transparent), and includes a clear Call to action (review policies). The POINT — botulism from pruno is preventable — is stated upfront. This approach is consistent with how the CDC and state health departments reported these outbreaks in the MMWR.',
+        casefile: 'Public health advisory: botulism from pruno, clinical presentation, prevention steps, policy review call to action — issued to corrections facilities nationally.',
+      },
+      {
+        text: 'Avoid publicizing the outbreak to prevent stigmatizing the prison population',
+        correct: false,
+        feedback: '✗ Suppressing outbreak information prevents other facilities from taking protective action — potentially allowing future preventable deaths. WHO emphasizes that announcing a situation early and being transparent helps "Create trust" and saves lives. Concerns about stigma are legitimate but should be addressed through careful framing, not silence.',
+      },
+      {
+        text: 'Focus all communication on the inmates\' illegal behavior — making alcohol is against prison rules and they knew the risks',
+        correct: false,
+        feedback: '✗ This approach fails the WHO principle of "Cater to the HEART and HEAD": it ignores the legitimate public health finding that prison conditions contribute to pruno production, and it does not serve the SOCO (protecting health). Effective public health communication is not about assigning blame — it is about preventing future harm.',
+      },
+      {
+        text: 'Issue a press release that names the specific prison and the names of affected inmates',
+        correct: false,
+        feedback: '✗ Publishing patient names violates medical privacy (HIPAA in the U.S.) and ethical standards for outbreak communications. Public health reports identify facilities by type and region when necessary for public protection, but do not disclose patient identities without consent. The MMWR reports on which this case is based used anonymized data for exactly this reason.',
+      },
+    ],
+  },
+  {
+    speaker: 'STATE HEALTH OFFICER',
+    scene: 'pruno_press',
+    text: `Excellent work, Detective. You successfully:\n\n• Identified botulism from the clinical presentation\n• Established pruno as the vehicle through epidemiologic analysis\n• Confirmed the lab findings (toxin type A in patients and in the pruno)\n• Explained the microbiology and mechanism of illness\n• Coordinated timely HBAT administration — zero deaths\n\nRecommendations have been issued to the Bureau of Prisons. Case closed.`,
+    xp: 150,
+    casefile: 'CASE 2 CLOSED. Foodborne botulism from pruno with baked potato. Toxin type A. All 5 patients survived. Recommendations issued.',
+  },
+];
+
+/* ── CASE 3: CITY CENTER CLUSTER (Legionnaires', Medium) ────── */
+const CASE_LEGIONNAIRES = [
+  {
+    speaker: 'DISPATCH',
+    scene: 'legionnaires',
+    text: `OUTBREAK ALERT — Monday, 9:15 AM\n\nThe City Health Department is reporting 7 cases of severe pneumonia in adults, all with onset in the past 2 weeks. The cases are clustered in the downtown area, and several required intensive care.\n\nThis cluster is above the expected baseline for community-acquired pneumonia. You've been assigned as lead investigator.`,
+    casefile: 'CASE OPENED: 7 severe pneumonia cases, downtown cluster, past 2 weeks. Above baseline — outbreak suspected.',
   },
   {
     speaker: 'LAB SCIENTIST',
     boxStyle: 'pixel-box-yellow',
     scene: 'legionnaires_lab',
-    text: `Urinary antigen tests — our rapid diagnostic — came back POSITIVE for Legionella pneumophila serogroup 1 in 6 of 7 cases. The 7th has sputum cultures pending.\n\nDiagnosis confirmed. Now we need to find the environmental source.`,
-    casefile: 'LAB: 6/7 positive Legionella urinary antigen. Serogroup 1 confirmed.',
+    text: `Urinary antigen tests — a rapid, commonly used diagnostic — came back POSITIVE for Legionella pneumophila serogroup 1 in 6 of 7 cases. The 7th has sputum cultures pending.\n\nDiagnosis confirmed. Now we need to find the environmental source.`,
+    casefile: 'LAB: 6/7 positive Legionella urinary antigen test. Serogroup 1 confirmed.',
   },
   {
-    speaker: 'HEALTH DIRECTOR',
-    boxStyle: 'pixel-box-cyan',
-    text: `Legionella lives and grows in warm, stagnant water. It becomes a hazard when aerosolized. Which environments are the most important to investigate?`,
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Legionella pneumophila serogroup 1 is confirmed. This organism does NOT spread from person to person. What is the most common environmental source found in Legionnaires' disease outbreak investigations?`,
     choices: [
       {
-        text: 'Restaurant kitchens and food preparation surfaces',
-        correct: false,
-        feedback: 'While Legionella can theoretically be present in any water, kitchens aren\'t the primary concern. Think about large water systems that create fine aerosols breathed by many people.',
-      },
-      {
-        text: 'Cooling towers, hot tubs, decorative fountains, and large building water systems',
+        text: 'Cooling towers and large building water systems that produce a fine water mist (aerosol) — breathing in contaminated water droplets causes infection',
         correct: true,
-        xp: 25,
-        feedback: 'Exactly right! Cooling towers (air conditioners), hot tubs, decorative fountains, and large potable water systems (hospitals, hotels) are the classic sources. Cooling towers in particular can spread Legionella over large geographic areas via aerosolized droplets.',
-        casefile: 'Q2 ✓ Priority environments: cooling towers, hot tubs, large HVAC water systems.',
+        xp: 40,
+        feedback: '✓ Correct! Legionella thrives in warm water (25–45°C / 77–113°F) in large plumbing systems. The bacteria become dangerous when water is aerosolized (turned into a fine mist) — for example, by a cooling tower, shower, decorative fountain, or HVAC system. Inhaling those droplets is how people get infected. It is NOT spread person to person.',
+        casefile: 'Transmission: inhaled aerosolized water from cooling towers or large water systems. NOT person-to-person.',
       },
       {
-        text: 'Swimming pools — all 7 patients likely swam together',
+        text: 'Contaminated food served at a shared meal — Legionella is a common foodborne pathogen',
         correct: false,
-        feedback: 'Properly chlorinated swimming pools rarely cause Legionellosis. The chlorine kills Legionella. Hot tubs are higher risk because of warmer temperatures and jet aeration, but they also require proper disinfection.',
+        feedback: '✗ Legionella is not a foodborne pathogen. It does not infect people through food. It requires inhalation of aerosolized water droplets to cause pulmonary (lung) infection.',
       },
       {
-        text: 'Tap water only — all drinking water carries equal risk',
+        text: 'Coughing and sneezing from infected patients — respiratory droplets spread it like the flu',
         correct: false,
-        feedback: 'Tap water can harbor Legionella but isn\'t the usual driver of large outbreaks. The risk is highest in water that is warm, stagnant, and has complex piping — the conditions that allow the organism to amplify to dangerous levels.',
+        feedback: '✗ Legionnaires\' disease is not transmitted person to person through coughing or sneezing. This is a critical infection control point — cases do not need to be isolated for respiratory precautions. The source is always environmental (a contaminated water system).',
+      },
+      {
+        text: 'Digging or disturbing contaminated soil at construction sites',
+        correct: false,
+        feedback: '✗ Some environmental pathogens (like Histoplasma or Coccidioides) are linked to soil or dust. Legionella is specifically a waterborne pathogen — it lives in warm water systems and is transmitted via water aerosols, not soil.',
       },
     ],
   },
   {
     speaker: 'FIELD EPIDEMIOLOGIST',
-    text: `We interviewed all 7 cases. We constructed an epidemic curve. Look at the onset dates and the building proximity data.`,
     scene: 'legionnaires_interviews',
+    text: `We interviewed all 7 cases and plotted the epidemic curve. Look at how cases are distributed over the 2-week investigation period — and notice the building exposure data from interviews.`,
     tools: {
       type: 'epicurve',
-      title: 'EPIDEMIC CURVE — LEGIONNAIRES\' CLUSTER (onset dates)',
+      title: "EPI CURVE — LEGIONNAIRES' CLUSTER (date of symptom onset)",
       bars: [
-        {label:'Week 1\nDay 1', count:0},
-        {label:'Day 2',  count:0},
-        {label:'Day 3',  count:1, type:'early', color:'#ff8800'},
-        {label:'Day 4',  count:0},
-        {label:'Day 5',  count:2, type:'peak',  color:'#ff2244'},
-        {label:'Day 6',  count:1, type:'peak',  color:'#ff4466'},
-        {label:'Day 7',  count:0},
-        {label:'Week 2\nDay 8', count:1, type:'early', color:'#ff8800'},
-        {label:'Day 9',  count:0},
-        {label:'Day 10', count:0},
-        {label:'Day 11', count:1, type:'early', color:'#ff8800'},
-        {label:'Day 12', count:0},
-        {label:'Week 3\nDay 13',count:0},
-        {label:'Day 14', count:1, type:'late',  color:'#ff6688'},
+        {label:'Jun 1',count:0},{label:'Jun 3',count:1},{label:'Jun 5',count:0},
+        {label:'Jun 7',count:2,highlight:true},{label:'Jun 9',count:2,highlight:true},
+        {label:'Jun 11',count:1},{label:'Jun 13',count:1},{label:'Jun 15',count:0},
       ],
-      legend: [{color:'#ff2244',label:'Peak cases'},{color:'#ff8800',label:'Secondary cases'},{color:'#4488ff',label:'No cases'}],
+      xlabel: 'Date of Symptom Onset',
+      ylabel: 'Cases',
     },
-    casefile: 'Epi curve received. Cases span 3 weeks — analyze the pattern.',
+    casefile: 'Epi curve: cases spread over 2 weeks with no single sharp peak — pattern suggests continuous/intermittent source.',
   },
   {
-    speaker: 'YOU — FIELD EPIDEMIOLOGIST',
-    text: `This epi curve looks very different from the banquet outbreak. Cases are spread over three weeks with no sharp single peak.\n\nWhat does this epidemic curve pattern suggest about the source?`,
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
     keepTools: true,
+    text: `The epi curve shows cases spread over about 2 weeks with no single sharp peak. Legionella has an incubation period of 2–10 days. What does this pattern suggest about the type of outbreak?`,
     choices: [
       {
-        text: 'Propagated source — person-to-person spread (cases infecting each other)',
-        correct: false,
-        feedback: 'Legionella does NOT spread person-to-person. Every case got infected from an environmental source. But this pattern does suggest something about the source continuity...',
-      },
-      {
-        text: 'Ongoing or intermittent environmental source — not a single point exposure',
+        text: 'Continuous or intermittent common source — people are being repeatedly exposed to the same contaminated environmental source (like a cooling tower running over several weeks)',
         correct: true,
-        xp: 30,
-        feedback: 'Excellent reasoning! A point-source outbreak causes a single peak. A curve stretched over weeks, with cases appearing sporadically, suggests people continue to be exposed to the same environmental source intermittently — like a cooling tower running continuously and people walking through the aerosolized plume at different times.',
-        casefile: 'Q3 ✓ Pattern = ongoing environmental source. Continuous exposure, not single point event.',
+        xp: 40,
+        feedback: '✓ Correct! Cases spread across multiple incubation periods (2–10 days for Legionella) without a single sharp peak suggests ongoing exposure from a continuously operating source — consistent with a cooling tower or large water system releasing contaminated aerosols over weeks. Compare this to Case 1\'s sharp single-day peak (point-source).',
+        casefile: 'Epi curve pattern: continuous/intermittent common source. Consistent with ongoing environmental aerosol exposure.',
       },
       {
-        text: 'Mixed outbreak — some cases are foodborne, others airborne',
+        text: 'Point-source — all exposure happened at one specific time',
         correct: false,
-        feedback: 'Legionella is exclusively transmitted through inhalation of contaminated aerosols — not by food or person-to-person contact. All cases here share the same transmission pathway.',
+        feedback: '✗ A point-source outbreak produces a single sharp peak with cases clustered within approximately one incubation period. Here, cases are spread across 2 weeks — much too long for a single exposure event, given that Legionella\'s incubation period is only 2–10 days.',
       },
       {
-        text: 'Too few cases to interpret the curve',
+        text: 'Propagated outbreak — cases are spreading from person to person in new generations',
         correct: false,
-        feedback: 'Even with small case counts, the temporal distribution of cases is informative. Epidemiologists regularly use epi curves with small clusters. The pattern here clearly differs from a point-source.',
+        feedback: '✗ Legionella does NOT spread person to person, so a propagated pattern is biologically impossible for Legionnaires\' disease. The spread-out pattern here reflects ongoing exposure to a contaminated environmental source, not secondary transmission.',
       },
     ],
   },
   {
     speaker: 'ENVIRONMENTAL HEALTH SPECIALIST',
-    text: `Spatial analysis complete. All 7 cases spent time within 400 meters of the Grand Central Hotel in the 2-10 days before symptom onset. The hotel has a rooftop cooling tower last serviced 6 months ago.`,
-    casefile: 'Geographic cluster: All cases within 400m of Grand Central Hotel. Cooling tower not serviced in 6 months.',
     scene: 'legionnaires_spatial',
+    text: `Spatial analysis complete. All 7 cases spent time within 400 meters of the Grand Central Hotel in the 2–10 days before their symptoms started. The hotel has a rooftop cooling tower that has not been serviced in 6 months.`,
+    casefile: 'Geographic cluster: all cases within 400m of Grand Central Hotel. Cooling tower not serviced in 6 months.',
   },
   {
-    speaker: 'MENTOR',
+    speaker: 'MENTOR — DR. OKAFOR',
     boxStyle: 'pixel-box',
-    text: `We need to take environmental samples. When testing the cooling tower water for Legionella, what concentration level typically indicates a high-risk situation requiring immediate action?`,
+    text: `Given the geographic clustering and epi curve, what is the best way to confirm the cooling tower as the outbreak source?`,
     choices: [
       {
-        text: 'Any detectable Legionella > 0 CFU/mL requires immediate shutdown',
-        correct: false,
-        feedback: 'Low levels of Legionella can be detected in many water systems. Most guidelines use a threshold approach, as very low concentrations may not pose significant risk. Immediate shutdown is triggered by higher concentrations or confirmed human illness.',
-      },
-      {
-        text: 'Greater than 1,000 CFU/mL (or 10³ CFU/mL) or any level with associated cases',
+        text: 'Collect water samples from the cooling tower and run whole-genome sequencing (WGS) to see if the environmental Legionella strain matches the patient strain',
         correct: true,
-        xp: 25,
-        feedback: 'Correct! Most guidelines (including ASHRAE 188 and CDC) consider >1,000 CFU/mL a high-risk threshold requiring remediation. However, when there ARE confirmed human cases, remediation should occur at any detectable level. The combination of lab confirmation + linked cases is the key indicator.',
-        casefile: 'Q4 ✓ Action threshold: >1000 CFU/mL or any level + confirmed cases. Remediation required.',
+        xp: 50,
+        feedback: '✓ Correct! Environmental sampling combined with molecular typing (WGS or PFGE) is the gold standard for confirming an environmental source. If the genetic fingerprint of the Legionella isolate from the cooling tower matches the isolates from patients, that is definitive evidence they share a common source.',
+        casefile: 'Plan: environmental water sampling from cooling tower + WGS molecular typing to match patient strains.',
       },
       {
-        text: 'Greater than 1,000,000 CFU/mL — only extreme concentrations are dangerous',
+        text: 'Run a randomized controlled trial (RCT) comparing people who walked near the hotel to people who stayed home',
         correct: false,
-        feedback: 'Action thresholds are much lower. At 10⁶ CFU/mL, you would have a catastrophic contamination. Real-world outbreak-linked towers often test in the 10³-10⁵ range.',
+        feedback: '✗ RCTs are not ethically feasible for outbreak investigation — you cannot randomly assign people to be exposed to a potentially contaminated cooling tower. The standard approach is either an observational analytic study (cohort or case-control) plus environmental sampling with molecular typing, which provides direct evidence of the source.',
       },
       {
-        text: 'pH and temperature matter more than culture results',
+        text: 'Survey all downtown restaurants for a common food source that might explain the cluster',
         correct: false,
-        feedback: 'pH and temperature are important preventive parameters (Legionella thrives at 25-45°C), but microbiological culture results are the definitive measurement for risk assessment during an active outbreak.',
+        feedback: '✗ Legionella is not a foodborne pathogen. The environmental investigation should focus on water systems — especially cooling towers, large building water systems, and decorative fountains. Food is not a plausible vehicle.',
       },
     ],
   },
@@ -1961,300 +1580,259 @@ const CASE_LEGIONNAIRES = [
     speaker: 'LAB SCIENTIST',
     boxStyle: 'pixel-box-yellow',
     scene: 'legionnaires_cooling_tower',
-    text: `Cooling tower water sample results: POSITIVE for Legionella pneumophila, serogroup 1.\n\nConcentration: 48,000 CFU/mL\n\nMolecular typing (PFGE/WGS): Identical banding pattern to patient isolates. MATCH CONFIRMED.\n\nThis is your source.`,
-
+    text: `Cooling tower water sample results: POSITIVE for Legionella pneumophila, serogroup 1.\n\nConcentration: 48,000 CFU per milliliter (very high — well above safety thresholds)\n\nMolecular typing (WGS): Identical genetic fingerprint to the patient isolates.\n\nSOURCE CONFIRMED.`,
     xp: 50,
-    casefile: 'ENVIRONMENTAL MATCH: Cooling tower positive L. pneumophila sg1. 48,000 CFU/mL. WGS match to cases.',
+    casefile: 'ENVIRONMENTAL MATCH: Cooling tower L. pneumophila sg1 positive. 48,000 CFU/mL. WGS matches all patient isolates.',
   },
   {
-    speaker: 'HEALTH DIRECTOR',
-    boxStyle: 'pixel-box-cyan',
-    text: `Brilliant work. Now an analytic question: What type of epidemiological study design is most appropriate for this cluster investigation, given that you don't know the full population at risk?`,
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `The cooling tower is confirmed as the source. What is the most appropriate immediate control measure?`,
     choices: [
       {
-        text: 'Prospective cohort study — follow everyone exposed going forward',
-        correct: false,
-        feedback: 'A prospective cohort study would take too long and isn\'t practical for an active outbreak with an environmental source. You need to identify the source now to stop ongoing exposure.',
-      },
-      {
-        text: 'Case-control study — compare cases to controls for environmental exposures',
+        text: 'Shut down the cooling tower and perform hyperchlorination (shock disinfection), then put a Water Management Plan in place for long-term monitoring and control',
         correct: true,
-        xp: 30,
-        feedback: 'Correct! When you have identified cases but don\'t know the full population at risk (who was exposed to the cooling tower?), a case-control study is the right design. You compare the exposures of sick people (cases) to exposures of similar well people (controls) in the same area to identify risk factors.',
-        casefile: 'Q5 ✓ Case-control design appropriate: unknown denominator, retrospective exposure assessment needed.',
+        xp: 40,
+        feedback: '✓ Correct! The cooling tower must be shut down immediately and hyperchlorinated (treated with high-dose chlorine) to eliminate the Legionella. Long-term control requires a formal Water Management Plan (WMP), consistent with ASHRAE Standard 188, which includes regular water testing, biocide treatment, and physical cleaning.',
+        casefile: 'Control: cooling tower shut down; hyperchlorination started; Water Management Plan required.',
       },
       {
-        text: 'Cross-sectional study — one-time survey of prevalence',
+        text: 'Issue a "boil water advisory" to residents and businesses near the hotel',
         correct: false,
-        feedback: 'Cross-sectional studies measure prevalence at a single point in time and can\'t establish temporal relationships well. They\'re good for chronic disease prevalence but not optimal for outbreak investigation with time-varying exposure.',
+        feedback: '✗ Boil water advisories apply to drinking water contamination. Legionnaires\' disease is caused by inhaling aerosolized water droplets — not by drinking contaminated water. The cooling tower (the source of the aerosols) must be shut down and disinfected.',
       },
       {
-        text: 'Ecologic study — compare rates across geographic areas',
+        text: 'Permanently close the hotel and demolish the cooling tower',
         correct: false,
-        feedback: 'Ecologic studies compare aggregated data across populations or regions. They\'re useful for hypothesis generation but suffer from the ecologic fallacy. For outbreak investigation, individual-level data gives you much stronger evidence.',
+        feedback: '✗ Permanent closure is not necessary and not a proportionate response. Proper remediation — shutdown, hyperchlorination, and an ongoing Water Management Plan — is the appropriate evidence-based intervention that allows the facility to safely resume operations.',
+      },
+    ],
+  },
+
+  /* ── CHAPTER: PUBLIC HEALTH RECOMMENDATIONS ── */
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    scene: 'legionnaires_press',
+    text: `Before we close this case, you need to issue formal public health recommendations. Legionnaires' disease outbreaks are particularly challenging to communicate about because the source is environmental — not a visible behavior like unsafe food handling — and because the disease has a name that can cause confusion or alarm.\n\nUsing the WHO communications framework: start with your SOCO. You have two audiences with different needs — the hotel management and the general public near the affected area. Who needs to change what, and how quickly?`,
+    casefile: 'Step: Issuing public health recommendations — hotel management and public communication.',
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Your SOCO for the hotel: "Management immediately remediates the contaminated cooling tower and establishes permanent water safety protocols so that no future guests, employees, or community members are exposed to Legionella."\n\nWhich recommendation to the Grand Central Hotel is the most important?`,
+    choices: [
+      {
+        text: 'Shut down the cooling tower immediately, complete the hyperchlorination protocol, and implement a written Water Management Plan (WMP) that includes regular Legionella testing, biocide treatment schedules, and physical cleaning — consistent with ASHRAE Standard 188',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Correct. A Water Management Plan (WMP) is not optional after a confirmed Legionella outbreak — it is the standard of care and is required under ASHRAE 188 and recommended by the CDC. The recommendation addresses all three components: immediate control (shut down and hyperchlorinate), confirmation (re-test before restart), and long-term prevention (WMP with scheduled monitoring). This is specific, actionable, evidence-based, and includes a clear call to action — the core of WHO\'s 7 Cs framework.',
+        casefile: 'Rec to hotel: WMP required per ASHRAE 188; cooling tower shutdown; hyperchlorination; Legionella testing before restart; scheduled monitoring.',
+      },
+      {
+        text: 'Replace all the water in the building\'s plumbing system with bottled water for the next 30 days',
+        correct: false,
+        feedback: '✗ This misunderstands the transmission route. Legionnaires\' disease is caused by inhaling aerosolized water droplets — not by drinking water. Replacing drinking water does nothing to address the cooling tower aerosol source. Recommendations must be directly linked to the confirmed transmission mechanism.',
+      },
+      {
+        text: 'Permanently close the hotel — the liability risk is too high to reopen',
+        correct: false,
+        feedback: '✗ Permanent closure is disproportionate and not supported by evidence. With proper remediation — hyperchlorination, re-testing, and a Water Management Plan — the facility can safely resume operations. WHO guidance stresses that recommendations must be realistic and achievable to be followed. An overly punitive recommendation will not be implemented and damages the relationship needed to protect public health.',
+      },
+      {
+        text: 'Notify hotel guests to take antibiotics prophylactically to prevent Legionnaires\' disease',
+        correct: false,
+        feedback: '✗ Antibiotic prophylaxis is not recommended for Legionnaires\' disease. People who were exposed but are not symptomatic do not need treatment — the incubation period is 2–10 days, and most exposed individuals will not develop illness. The correct guidance for potentially exposed persons is: watch for symptoms (fever, cough, shortness of breath) and seek care promptly if they develop.',
       },
     ],
   },
   {
-    speaker: 'ENVIRONMENTAL HEALTH SPECIALIST',
-    text: `The cooling tower was hyperchlorinated and physically decontaminated. No new cases reported in 21 days. The outbreak is over.\n\nFinal case count: 7 cases, 1 death (14% case-fatality rate). Root cause: Inadequate cooling tower maintenance and water treatment.`,
-    scene: 'legionnaires',
-    casefile: 'OUTBREAK OVER: No new cases 21 days post-remediation. 7 cases, 1 death (CFR 14%).',
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Now for public communication. Your SOCO for the public: "Community members who may have been exposed understand what symptoms to watch for, when to seek care, and that the source has been controlled — so they can protect themselves without unnecessary panic."\n\nLegionella outbreaks are frequently misunderstood by the public. Which approach best reflects WHO principles of risk communication?`,
+    choices: [
+      {
+        text: 'Be transparent and timely: announce early that an investigation is underway, confirm the source once identified, explain that the cooling tower has been shut down and treated, describe the symptoms to watch for, and advise exposed individuals when to seek medical care — all in plain, non-alarming language',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Correct. WHO\'s risk communication principles emphasize announcing early, being transparent, and providing actionable guidance. This response addresses all 7 Cs: it Commands attention (confirmed Legionella cluster), Clarifies the message (symptoms, exposure, control measures), Communicates a benefit (know when to get care, source is now controlled), maintains Consistency with the evidence, Caters to both HEART (acknowledges community concern) and HEAD (factual, proportionate), Creates trust (transparent, early announcement), and includes a clear Call to action (watch for symptoms, seek care if feverish and short of breath). Announcing early and often — even before all facts are known — builds more trust than waiting for a complete picture.',
+        casefile: 'Public communication: early announcement, source confirmed and controlled, symptom watch-and-report guidance, plain language.',
+      },
+      {
+        text: 'Wait until the full investigation is complete before making any public statement — releasing incomplete information causes unnecessary panic',
+        correct: false,
+        feedback: '✗ Delaying communication is one of the most common — and damaging — public health communication mistakes. WHO guidance is explicit: announcing a situation early builds trust, while silence erodes it. Community members who find out through other channels (social media, news) before the health department speaks will distrust all subsequent official communications. "We are investigating and will update you" is always better than silence.',
+      },
+      {
+        text: 'Avoid using the word "Legionella" in public communications — it sounds frightening and will cause a media firestorm',
+        correct: false,
+        feedback: '✗ Avoiding accurate terminology undermines credibility. If the media or community later learn that officials withheld the diagnosis, trust collapses entirely. WHO guidance emphasizes "Create trust" through transparency. Using correct terms — paired with clear, calm explanations of what they mean — is far more effective than euphemisms.',
+      },
+      {
+        text: 'Advise all residents within one mile of the hotel to evacuate until the outbreak is declared over',
+        correct: false,
+        feedback: '✗ This is disproportionate to the actual risk. With the cooling tower shut down, the aerosol exposure route is eliminated. Mass evacuation would cause significant community disruption without any meaningful additional health benefit. Effective public health recommendations must be proportionate — calibrated to the actual risk — as well as specific and actionable.',
+      },
+    ],
   },
   {
     speaker: 'HEALTH DIRECTOR',
     boxStyle: 'pixel-box-cyan',
     scene: 'legionnaires_press',
-    text: `Excellent investigation, Detective. You correctly identified the source, guided the environmental sampling, understood the epidemiological study design, and helped implement control measures that stopped the outbreak.\n\nYour rank advancement is well-deserved. This is the work of a Senior Epi Detective.`,
-
+    text: `Excellent investigation, Detective. You identified the source, guided the environmental sampling strategy, applied the correct epidemiologic study design thinking, and helped stop the outbreak.\n\nYour rank advancement reflects the growing depth of your skills.`,
     xp: 250,
-    casefile: 'CASE 2 CLOSED: Cooling tower source confirmed via WGS. Remediation successful. 0 new cases.',
+    casefile: 'CASE 3 CLOSED: Cooling tower source confirmed via WGS. Hyperchlorination complete. 0 new cases after remediation.',
   },
 ];
 
-/* ============================================================
-   CASE 3: THE VACCINE HESITANCY CRISIS — MEASLES
-   ============================================================ */
-
+/* ── CASE 4: THE VACCINE HESITANCY CRISIS (Measles, Hard) ───── */
 const CASE_MEASLES = [
   {
-    speaker: 'STATE HEALTH OFFICER',
-    boxStyle: 'pixel-box-cyan',
+    speaker: 'DISPATCH',
     scene: 'measles',
-    text: `PRIORITY ALERT: Measles cluster identified at Westbrook Elementary School. 12 confirmed cases in the past 14 days. The school has a 72% vaccination rate — well below the herd immunity threshold.\n\nThis is your most complex case yet. You're not just fighting a virus. You'll battle misinformation, vaccine hesitancy, and community distrust.`,
-    casefile: 'CASE 3: Measles cluster, Westbrook Elementary. 12 cases. Vaccination coverage: 72%.',
+    text: `OUTBREAK ALERT — Friday, 2:00 PM\n\nRiverside Elementary School has reported 3 confirmed measles cases in a single classroom. All three developed a rash and fever in the same week.\n\nThis is a public health emergency. Measles is one of the most contagious diseases known. You have been dispatched.`,
+    casefile: 'CASE OPENED: 3 confirmed measles cases, Riverside Elementary School, same classroom, same week.',
   },
   {
-    speaker: 'MENTOR',
+    speaker: 'SCHOOL NURSE',
+    scene: 'measles_nurse_records',
+    text: `We've pulled vaccination records for all 340 students:\n• 245 fully vaccinated (2 doses of MMR)\n• 48 unvaccinated (parental exemption)\n• 31 vaccinated with only 1 dose of MMR\n• 16 with unknown vaccination status\n\nAmong the 12 confirmed cases: 9 are unvaccinated, 2 received only 1 dose of MMR, and 1 has unknown status.`,
+    casefile: 'Vaccination: 245 two-dose MMR, 48 unvax, 31 one-dose, 16 unknown. Cases: 9 unvax, 2 one-dose, 1 unknown.',
+    tools: {
+      type: 'table',
+      title: 'MEASLES ATTACK RATES BY VACCINATION STATUS',
+      headers: ['Vaccination Status','Students','Cases','Attack Rate'],
+      rows: [
+        ['Unvaccinated','48','9','18.75%'],
+        ['1-dose MMR','31','2','6.45%'],
+        ['2-dose MMR (fully vaccinated)','245','0','0.00%'],
+        ['Unknown','16','1','6.25%'],
+      ],
+    },
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
     boxStyle: 'pixel-box',
-    text: `Measles is one of the most contagious infectious diseases known. Its basic reproduction number — R₀ — is famously high.\n\nWhat is the R₀ of measles, and what does it mean for herd immunity?`,
+    scene: 'measles_vaccine_efficacy',
+    text: `Look at the vaccine efficacy data. Calculate the vaccine efficacy (VE) for 2-dose MMR using the standard formula:\n\nVE = (ARu − ARv) ÷ ARu × 100%\n\nWhere ARu = attack rate in unvaccinated students\n      ARv = attack rate in vaccinated students`,
+    keepTools: true,
     choices: [
       {
-        text: 'R₀ = 2-3 (like influenza); herd immunity requires ~60-70% vaccination',
-        correct: false,
-        feedback: 'That\'s influenza\'s R₀ range, not measles. Measles is far more contagious. The herd immunity threshold (HIT) is calculated as: 1 - 1/R₀. With R₀=2.5, HIT = 1 - 1/2.5 = 60%. Much lower than measles actually requires.',
-      },
-      {
-        text: 'R₀ = 12-18; herd immunity requires 92-95% vaccination coverage',
+        text: 'VE = (18.75% − 0%) ÷ 18.75% × 100% = 100%',
         correct: true,
-        xp: 35,
-        feedback: 'Exactly right! Measles has one of the highest R₀ values of any infectious disease (12-18). Using the formula HIT = 1 - 1/R₀: with R₀=18, HIT = 1 - 1/18 = 94.4%. This is why 95%+ vaccination coverage is needed to maintain herd immunity. At 72%, this school is dangerously below threshold.',
-        casefile: 'Q1 ✓ Measles R₀=12-18. HIT=92-95%. School at 72% = far below threshold. Outbreak expected.',
+        xp: 50,
+        feedback: '✓ Correct! VE = (18.75 − 0) ÷ 18.75 × 100% = 100%. This is consistent with published data showing 2-dose MMR has about 97% efficacy. Zero cases among 245 fully vaccinated students is exactly what we expect from a highly effective vaccine.',
+        casefile: 'VE (2-dose MMR) = 100% in this outbreak. Consistent with published ~97% efficacy.',
       },
       {
-        text: 'R₀ = 5-7; herd immunity requires ~85% vaccination',
+        text: 'VE = 245 ÷ 340 × 100% = 72% — the proportion of students who are vaccinated',
         correct: false,
-        feedback: 'R₀ of 5-7 is closer to polio or smallpox. Measles is significantly more contagious, with R₀ of 12-18. This extraordinary transmissibility is why measles was such a devastating childhood disease before vaccination.',
+        feedback: '✗ 72% is the vaccination coverage rate — the proportion of the school population that is vaccinated. Vaccine efficacy (VE) is different: it measures how well the vaccine prevents disease by comparing attack rates in vaccinated vs. unvaccinated groups.',
       },
       {
-        text: 'R₀ doesn\'t determine herd immunity — only antibody titers matter',
+        text: 'VE = 9 ÷ 48 = 18.75% — that\'s just the attack rate in unvaccinated students',
         correct: false,
-        feedback: 'The herd immunity threshold IS mathematically derived from R₀: HIT = 1 - 1/R₀. Individual antibody titers determine PERSONAL protection, but population-level herd immunity is a function of how many people need to be immune to break transmission chains — which depends on R₀.',
+        feedback: '✗ 18.75% is the attack rate in the unvaccinated group — one input in the VE formula — but it is not the vaccine efficacy itself. VE compares the attack rate in vaccinated students to the attack rate in unvaccinated students: VE = (ARu − ARv) ÷ ARu × 100%.',
+      },
+      {
+        text: 'VE cannot be calculated when zero vaccinated students got sick',
+        correct: false,
+        feedback: '✗ Zero cases in the vaccinated group is actually a valid result and gives a VE of 100%. VE = (18.75% − 0%) ÷ 18.75% = 100%. Having zero cases in the vaccinated group is the ideal outcome — it means the vaccine prevented every single case in that group.',
       },
     ],
   },
   {
-    speaker: 'SCHOOL NURSE',
-    text: `We\'ve pulled the vaccination records. Of 340 students:\n• 245 fully vaccinated (2 doses MMR)\n• 48 unvaccinated (parental exemption)\n• 31 vaccinated with 1 dose\n• 16 unknown vaccination status\n\nThe 12 cases: 9 are unvaccinated, 2 are 1-dose recipients, 1 is unknown.`,
-    scene: 'measles_nurse_records',
-    casefile: 'Vaccination breakdown: 245 full (2-dose), 48 unvax, 31 single-dose, 16 unknown.',
-    tools: {
-      type: 'table',
-      title: 'MEASLES ATTACK RATES BY VACCINATION STATUS',
-      headers: ['Vaccination Status', 'Cases', 'Total', 'Attack Rate', 'Vaccine Efficacy'],
-      rows: [
-        ['Unvaccinated',  '9',  '48', {value:'18.8%', highlight:true}, 'N/A (reference)'],
-        ['1 Dose MMR',    '2',  '31', '6.5%',  {value:'~65%', highlight:false}],
-        ['2 Doses MMR',   '1',  '245','0.4%',  {value:'~98%', highlight:true}],
-        ['Unknown',       '0',  '16', '0%',    '—'],
-      ],
-    },
-    xp: 0,
-  },
-  {
-    speaker: 'MENTOR',
+    speaker: 'MENTOR — DR. OKAFOR',
     boxStyle: 'pixel-box',
-    scene: 'measles_vaccine_efficacy',
-    text: `Look at the vaccine efficacy data. Calculate the vaccine efficacy (VE) for 2-dose MMR using the standard formula:\n\nVE = (ARu - ARv) / ARu × 100%\n\nWhere ARu = attack rate in unvaccinated, ARv = attack rate in vaccinated.`,
-    keepTools: true,
+    text: `Measles has one of the highest basic reproduction numbers (R₀) of any known infectious disease. The R₀ is the average number of new cases a single case generates in a population with no immunity.\n\nIf measles R₀ = 15, what is the herd immunity threshold (HIT) — the minimum proportion of the population that must be immune to prevent sustained spread?`,
     choices: [
       {
-        text: 'VE ≈ 52% — the vaccine halves your risk',
-        correct: false,
-        feedback: 'Let\'s calculate: ARu = 18.8%, ARv = 0.4%. VE = (18.8 - 0.4) / 18.8 × 100 = 18.4/18.8 × 100 ≈ 97.9%. That\'s much higher than 52%.',
-      },
-      {
-        text: 'VE ≈ 98% — 2-dose MMR is highly effective',
+        text: 'HIT = 1 − (1 ÷ R₀) = 1 − (1 ÷ 15) = 93.3%',
         correct: true,
-        xp: 30,
-        feedback: 'Correct! VE = (18.8% - 0.4%) / 18.8% × 100 = 97.9% ≈ 98%. This is consistent with published MMR efficacy data. The 1-dose has ~93-95% efficacy after one dose; 2 doses provide 97-99% protection. The one 2-dose case is likely a rare vaccine failure or could be a non-responder.',
-        casefile: 'Q2 ✓ VE (2-dose MMR) = 97.9%. Highly effective. Cases concentrated in unvaccinated.',
+        xp: 50,
+        feedback: '✓ Correct! HIT = 1 − (1/R₀) = 1 − (1/15) = 0.933 = 93.3%. At least 93.3% of the population needs to be immune to prevent measles from spreading. The school\'s current 72% coverage is far below this threshold — that\'s why the outbreak spread.',
+        casefile: 'Measles R₀ = 15. Herd immunity threshold = 93.3%. Current school coverage is 72% — below threshold.',
       },
       {
-        text: 'VE ≈ 75% — moderately effective',
+        text: 'HIT = R₀ ÷ (R₀ + 1) = 15 ÷ 16 = 93.75%',
         correct: false,
-        feedback: 'Calculate using the formula: (ARu - ARv) / ARu = (18.8 - 0.4) / 18.8 = 0.978 = 97.8%. The MMR vaccine is among the most effective vaccines ever developed.',
+        feedback: '✗ The correct formula is HIT = 1 − (1/R₀). With R₀ = 15: HIT = 1 − 1/15 = 14/15 ≈ 93.3%. The formula R₀/(R₀+1) gives a slightly different — and incorrect — answer.',
       },
       {
-        text: 'Cannot determine VE without a randomized controlled trial',
+        text: 'HIT = 1 ÷ R₀ = 1 ÷ 15 = 6.7%',
         correct: false,
-        feedback: 'Vaccine efficacy can absolutely be estimated from outbreak data using the standard formula VE = (ARu - ARv)/ARu. This is a well-established epidemiological method called the "screening method" or cohort-based VE estimation.',
+        feedback: '✗ 1/R₀ gives the proportion of susceptible people that can remain in a population while still controlling spread — not the HIT. The herd immunity threshold is 1 − (1/R₀) = 93.3% for measles.',
+      },
+      {
+        text: 'HIT = 75% for all vaccine-preventable diseases',
+        correct: false,
+        feedback: '✗ The herd immunity threshold varies by disease depending on its R₀. Measles (R₀ = 12–18) requires about 93–95% immunity. Polio (R₀ = 5–7) requires about 80–85%. Seasonal influenza (R₀ = 2–3) requires about 50–67%. There is no universal threshold.',
       },
     ],
   },
   {
     speaker: 'COMMUNITY HEALTH WORKER',
     boxStyle: 'pixel-box',
-    text: `We\'ve identified a community Facebook group with over 2,000 members sharing anti-vaccine content. Common claims include:\n\n• "MMR causes autism"\n• "Measles is just a rash — not dangerous"\n• "Natural immunity is better than vaccine immunity"\n• "The MMR contains toxins"\n\nParents are keeping unvaccinated kids home but refusing vaccination.`,
     scene: 'measles_facebook',
-    casefile: 'Community misinformation: Facebook group, 2000 members. Autism claims, natural immunity myths.',
+    text: `We've identified a community Facebook group with over 2,000 members actively sharing anti-vaccine content. Common claims include:\n\n• "MMR causes autism"\n• "Measles is just a rash — not dangerous"\n• "Natural immunity is better and lasts longer than vaccine immunity"\n• "The MMR contains harmful toxins"\n\nParents are keeping unvaccinated children home, but many are refusing vaccination.`,
+    casefile: 'Community misinformation: Facebook group, 2000 members. Autism claims, natural immunity myths circulating.',
   },
   {
     speaker: 'VACCINE-HESITANT PARENT',
-    boxStyle: 'pixel-box-red',
-    text: `"Look, I\'ve done my research. I read that the MMR causes autism. My child, my choice. I\'d rather my kid get natural immunity than be injected with chemicals. The health department just wants to sell vaccines anyway."`,
-    scene: 'measles',
+    text: `I want to ask you directly, Doctor — is it true that natural immunity from getting measles is stronger and lasts longer than vaccine immunity? I've read that on several websites.`,
   },
   {
-    speaker: 'YOU — OUTBREAK SPECIALIST',
-    text: `This parent\'s concerns are based on misinformation, but coming in dismissive won\'t work. How do I respond effectively to the autism concern?`,
-    choices: [
-      {
-        text: '"The autism study was fraudulent — Wakefield lost his medical license. Dozens of studies with millions of children find no link."',
-        correct: true,
-        xp: 25,
-        feedback: 'This is the correct approach — acknowledge the source of the concern (the 1998 Wakefield paper), explain clearly that it was fraudulent and retracted, and cite the robust evidence base. Studies including >1.2 million children across multiple countries find absolutely no link between MMR and autism. This is the strongest evidence-based counter.',
-        casefile: 'Q3 ✓ Autism response: Wakefield fraud, retracted 1998 Lancet paper. >1.2M children studied, no link found.',
-      },
-      {
-        text: '"Your concerns are completely baseless — stop spreading misinformation."',
-        correct: false,
-        feedback: 'Dismissing concerns outright often entrenches hesitancy rather than reducing it. Motivational interviewing and empathetic communication work better. Acknowledge the concern, then redirect to evidence.',
-      },
-      {
-        text: 'Just say nothing — debunking makes the myth stronger',
-        correct: false,
-        feedback: 'The "backfire effect" — where corrections strengthen misconceptions — has actually been found NOT to be universal in recent research. Thoughtful, empathetic correction with strong evidence is more effective than silence, especially in an active outbreak.',
-      },
-      {
-        text: '"Natural immunity IS better — we agree with you on that."',
-        correct: false,
-        feedback: 'This is factually incorrect and contradicts public health guidance. Natural measles infection carries serious risks: encephalitis (1 in 1,000), death (1-2 in 1,000 in developed countries, higher in developing settings), and paradoxically, measles causes immune amnesia — wiping out previously acquired immunity to other diseases.',
-      },
-    ],
-  },
-  {
-    speaker: 'MENTOR',
+    speaker: 'MENTOR — DR. OKAFOR',
     boxStyle: 'pixel-box',
     scene: 'measles_natural_vs_vaccine',
-    text: `The parent raised "natural immunity." Let\'s address this accurately. How does natural measles immunity compare to vaccine-induced immunity?`,
+    text: `A parent is asking about natural immunity vs. vaccine immunity. How should you accurately respond to this claim?`,
     choices: [
       {
-        text: 'Natural immunity is lifelong and stronger; vaccine immunity wanes and requires boosters',
-        correct: false,
-        feedback: 'This overstates the difference and misstates the risk. While natural immunity IS lifelong, so is the immunity from 2 doses of MMR for most people. The critical issue: to GET natural measles immunity, you must SURVIVE measles — and measles carries serious risks of complications and the devastating "immune amnesia" effect.',
-      },
-      {
-        text: 'Vaccine immunity is superior because it provides protection WITHOUT the risks of measles disease, including immune amnesia, encephalitis, and death',
+        text: 'Both provide lifelong immunity of similar strength — but natural measles infection carries a real risk of death, brain damage (encephalitis), and a rare delayed fatal condition (SSPE) that the vaccine does not',
         correct: true,
-        xp: 30,
-        feedback: 'Exactly right! Both natural and vaccine immunity are durable. But natural infection risks: encephalitis (1/1,000), SSPE (subacute sclerosing panencephalitis — always fatal), immune amnesia lasting 2-3 years (measles destroys 20-70% of B cell memory), and death. Vaccine provides equivalent immunity without these risks. There is no reason to prefer the disease.',
-        casefile: 'Q4 ✓ Natural vs vaccine immunity: both durable. Vaccine avoids measles encephalitis, immune amnesia, SSPE, death.',
+        xp: 50,
+        feedback: '✓ Correct! Both natural infection and 2-dose MMR produce strong, long-lasting immunity. However, the risks of natural measles are serious and preventable: death in 1–2 per 1,000 cases in high-income countries (higher elsewhere), encephalitis in 1/1,000, and subacute sclerosing panencephalitis (SSPE) — a fatal brain disease that can appear years after infection. The "natural immunity is better" claim ignores these risks entirely.',
+        casefile: 'Vaccine vs. natural: both lifelong; natural infection risks death (1–2/1,000), encephalitis, SSPE. Vaccine is safe.',
       },
       {
-        text: 'There is no difference — natural and vaccine immunity are identical in duration and strength',
+        text: 'Natural immunity is definitely superior and lasts much longer than vaccine immunity',
         correct: false,
-        feedback: 'There are real differences. Natural infection tends to produce somewhat higher antibody titers after acute infection, but this comes at the cost of serious disease risk. The 2-dose MMR schedule provides durable protection that for most people is lifelong.',
+        feedback: '✗ Both provide lifelong immunity of comparable duration and strength. The claim that natural immunity is "superior" is misleading when you consider the cost: measles kills 1–2/1,000 in high-income countries and can cause serious complications in many more. "Getting the disease for better immunity" is not a safe or ethical recommendation.',
       },
       {
-        text: '"Natural immunity" from community exposure (without disease) provides protection',
+        text: 'Vaccine immunity is stronger because it creates higher antibody levels',
         correct: false,
-        feedback: 'This describes an incorrect concept. "Natural immunity" only comes from surviving the actual infection. Sub-clinical exposure to measles does not reliably produce protective immunity without the full inflammatory response of disease.',
-      },
-    ],
-  },
-  {
-    speaker: 'STATE HEALTH OFFICER',
-    boxStyle: 'pixel-box-cyan',
-    text: `Good. Now for the outbreak response. We need to calculate the expected additional cases if we don\'t vaccinate, versus with an emergency vaccination campaign.\n\nWith the current 72% coverage and measles R₀ = 15, what is the effective reproduction number (Rₑ)?`,
-    tools: {
-      type: 'text',
-      content: `<strong style="color:var(--yellow)">Key Formulas:</strong><br><br>
-Rₑ = R₀ × (1 - vaccination coverage × vaccine efficacy)<br><br>
-Herd Immunity Threshold (HIT) = 1 - 1/R₀<br><br>
-<strong>Current situation:</strong><br>
-• R₀ = 15 (measles)<br>
-• Vaccination coverage = 72% (0.72)<br>
-• Vaccine efficacy = 98% (0.98)<br>
-• Effectively immune = 72% × 98% = 70.6%<br>
-• Susceptible fraction = 1 - 0.706 = 0.294<br><br>
-<strong>HIT for measles (R₀=15):</strong><br>
-HIT = 1 - 1/15 = 93.3%`,
-    },
-    casefile: 'Calculating Rₑ. Current coverage 72%, efficacy 98%, effective immunity 70.6%.',
-  },
-  {
-    speaker: 'MENTOR',
-    boxStyle: 'pixel-box',
-    text: `Using the formula Rₑ = R₀ × susceptible fraction:\n\nRₑ = 15 × (1 - 0.706) = 15 × 0.294 = ?`,
-    keepTools: true,
-    choices: [
-      {
-        text: 'Rₑ ≈ 4.4 — outbreak will grow; each case infects ~4 more people on average',
-        correct: true,
-        xp: 35,
-        feedback: 'Correct! Rₑ = 15 × 0.294 = 4.41. Since Rₑ > 1, the outbreak WILL grow exponentially without intervention. You would need to reduce the susceptible fraction below 6.7% (i.e., achieve >93.3% immunity) to bring Rₑ below 1 and stop transmission.',
-        casefile: 'Q5 ✓ Rₑ = 4.41 with current coverage. Outbreak will grow. Need >93% immunity to stop it.',
-      },
-      {
-        text: 'Rₑ ≈ 1.0 — outbreak is at the tipping point but not growing',
-        correct: false,
-        feedback: 'Calculate: Rₑ = R₀ × susceptible fraction. The susceptible fraction = 1 - (0.72 × 0.98) = 1 - 0.706 = 0.294. So Rₑ = 15 × 0.294 = 4.41. This is well above 1 — the outbreak will grow substantially.',
-      },
-      {
-        text: 'Rₑ < 1 — the outbreak will fizzle out on its own',
-        correct: false,
-        feedback: 'If Rₑ < 1, yes, the outbreak would naturally die out. But at 72% coverage with 98% efficacy, effective immunity is 70.6%, leaving 29.4% susceptible. With R₀=15, Rₑ = 15 × 0.294 = 4.41 — far above 1.',
-      },
-      {
-        text: 'Rₑ = 15 — vaccination has no effect on transmission',
-        correct: false,
-        feedback: 'The whole point of vaccination in communities is to reduce the susceptible fraction, thereby reducing Rₑ below R₀. Rₑ = R₀ × susceptible fraction. At 70.6% immunity, Rₑ = 15 × 0.294 = 4.41, substantially below R₀=15 but still far above 1.',
+        feedback: '✗ Antibody titers from natural infection may actually be slightly higher, but this doesn\'t make natural infection preferable or safer. The correct public health message is: both provide equivalent long-term protection, but the vaccine achieves this safely without the life-threatening risks of the disease itself.',
       },
     ],
   },
   {
     speaker: 'EPIDEMIOLOGIST — MODELING TEAM',
-    text: `Based on the Rₑ of 4.4, without intervention, our model projects 80-120 additional cases before the outbreak burns through the susceptible population.\n\nWith an emergency vaccination campaign targeting unvaccinated children and bringing coverage to 95%, Rₑ drops to 0.7 — below 1. The outbreak stops within 2 incubation periods.`,
-    casefile: 'Projection without intervention: 80-120 more cases. With campaign to 95%: Rₑ=0.7, outbreak stops.',
     scene: 'measles_outbreak_projection',
+    text: `Based on the effective reproduction number (Rₑ) of 4.4 in this partially immune school population, our model projects 80–120 additional cases without any intervention.\n\nIf we run an emergency vaccination campaign and bring coverage up to 95%, the Rₑ drops to 0.7 — below 1.0, which means the outbreak will stop spreading within 2 incubation periods.`,
+    casefile: 'Projection: 80–120 more cases without action. Emergency campaign to 95% → Rₑ = 0.7 → outbreak stops.',
   },
   {
     speaker: 'COMMUNITY LIAISON',
     scene: 'measles_vaccine_clinic',
-    text: `We\'ve set up a vaccine clinic at the school. 28 additional children vaccinated so far. But the Facebook group is actively discouraging parents from coming.\n\nCoverage has reached 89% — better, but still below the 93.3% threshold. What\'s our strategy?`,
+    text: `We've set up a vaccine clinic at the school. 28 more children have been vaccinated so far. But the Facebook group is actively posting against the clinic.\n\nCoverage has reached 89% — better, but still below the 93.3% herd immunity threshold. What is the most evidence-based strategy to reach the remaining hesitant families?`,
     choices: [
       {
-        text: 'Conduct a press conference to publicly shame vaccine-hesitant parents',
-        correct: false,
-        feedback: 'Public shaming reliably backfires. It entrenches hesitancy, destroys trust, and can create community division that makes future public health work harder. Empathy and trusted messengers are more effective.',
-      },
-      {
-        text: 'Partner with pediatricians, school nurses, and trusted community leaders to do door-to-door outreach with evidence-based messaging',
+        text: 'Work with trusted community voices — especially the children\'s pediatricians and local community leaders — and use motivational interviewing to meet parents where they are',
         correct: true,
-        xp: 30,
-        feedback: 'This is the gold standard approach! Trusted messengers (the child\'s own doctor, community leaders) are far more persuasive than public health officials alone. Door-to-door outreach removes barriers. Evidence-based messaging that acknowledges concerns without dismissal builds trust. This approach, combined with removing non-medical exemptions, has been used successfully in multiple outbreak responses.',
-        casefile: 'Q6 ✓ Best strategy: Trusted messengers, pediatricians, community leaders, door-to-door outreach.',
+        xp: 50,
+        feedback: '✓ Correct! Research consistently shows that trusted community messengers — especially primary care physicians — are the most effective way to address vaccine hesitancy. Motivational interviewing techniques (listening without judgment, asking permission, exploring concerns, avoiding confrontation) are more effective than fact-bombardment or shaming. This approach is recommended by the CDC, AAP, and WHO.',
+        casefile: 'Strategy: trusted messenger outreach (pediatricians, community leaders) + motivational interviewing.',
       },
       {
-        text: 'Wait for natural infection to provide immunity — it\'s more cost-effective',
+        text: 'Hold a press conference to publicly name vaccine-hesitant parents and shame them into compliance',
         correct: false,
-        feedback: 'This is ethically and scientifically unacceptable. Measles causes encephalitis in 1/1,000 cases, SSPE (always fatal) in 1-2/100,000 cases, and measles-induced immune amnesia that increases susceptibility to other diseases for 2-3 years. Allowing preventable disease is not a legitimate public health strategy.',
+        feedback: '✗ Publicly shaming hesitant parents tends to entrench their resistance (the "backfire effect") and damages trust in public health agencies. The evidence-based approach is empathetic, non-confrontational engagement through trusted community voices — not coercion or public humiliation.',
       },
       {
-        text: 'Contact Facebook and have the misinformation group removed immediately',
+        text: 'Immediately issue fines and legal penalties to all unvaccinated families',
         correct: false,
-        feedback: 'While platform-level action on misinformation has a role, it\'s slow, can\'t be done by local health departments unilaterally, and often drives groups underground (making them harder to counter). Active outreach and trusted messengers are more immediately effective during an outbreak.',
+        feedback: '✗ While mandates can raise vaccination coverage in some contexts, coercive measures used during an active outbreak response typically increase distrust and community resistance. The public health literature supports building trust, removing access barriers, and offering convenient vaccination — especially when hesitancy (not logistics) is the primary barrier.',
       },
     ],
   },
@@ -2262,47 +1840,82 @@ HIT = 1 - 1/15 = 93.3%`,
     speaker: 'PEDIATRICIAN — DR. CHEN',
     boxStyle: 'pixel-box-yellow',
     scene: 'measles_pediatrician',
-    text: `We worked through the community using trusted messenger outreach. Coverage has now reached 94.5% — above the 93.3% herd immunity threshold for measles.\n\nLast confirmed case: 18 days ago. No new cases in the past 2 incubation periods. The outbreak is over.`,
-    casefile: 'Vaccination coverage reached 94.5%. Last case 18 days ago. OUTBREAK TERMINATED.',
+    text: `We worked through trusted community messengers and motivational outreach. Vaccination coverage is now at 94.5% — above the 93.3% herd immunity threshold for measles.\n\nLast confirmed case: 18 days ago. No new cases in the past 2 incubation periods. The outbreak is over.`,
+    casefile: 'Coverage reached 94.5%. Last case 18 days ago. 2 full incubation periods with no new cases. OUTBREAK OVER.',
+  },
+
+  /* ── CHAPTER: PUBLIC HEALTH RECOMMENDATIONS ── */
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    scene: 'measles_health_officer_close',
+    text: `This outbreak tested every communication skill in the public health toolkit. You faced active misinformation, a frightened community, and a vocal anti-vaccine network — and you still brought coverage above the herd immunity threshold.\n\nNow formalize your recommendations. This is the hardest communications challenge of the four cases: your audiences include the school administration, vaccine-hesitant families, and the general public — each requiring a different SOCO and a different message strategy.`,
+    casefile: 'Step: Issuing public health recommendations — school, families, and public communication.',
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Your SOCO for the school administration: "The school establishes and enforces a vaccination verification policy so that future outbreaks are prevented and the school community remains safe."\n\nWhich recommendation to Riverside Elementary is the most important long-term measure?`,
+    choices: [
+      {
+        text: 'Establish a clear vaccination verification policy with defined procedures for reviewing exemption requests, excluding unvaccinated students during future outbreaks, and reporting vaccination rates annually to the local health department',
+        correct: true,
+        xp: 40,
+        feedback: '✓ Correct. A school vaccination policy with annual reporting and defined outbreak response procedures is the structural intervention most likely to prevent a recurrence. It addresses the root cause: vaccination coverage fell below the herd immunity threshold because there was no systematic mechanism to detect and respond to that gap. WHO\'s 7 Cs demand a specific Call to action — "establish a policy" is far more actionable than "encourage vaccination." Strong policies also support the principle of Consistency: the same standards apply to all students, which is both fair and effective.',
+        casefile: 'Rec to school: vaccination verification policy, exemption review procedures, outbreak exclusion protocol, annual coverage reporting.',
+      },
+      {
+        text: 'Ban all unvaccinated students from the school permanently',
+        correct: false,
+        feedback: '✗ Permanent exclusion is disproportionate and legally complex in most U.S. jurisdictions. The evidence-based approach is conditional exclusion during outbreaks combined with active efforts to reduce exemptions through education and access improvements. Permanent bans tend to generate legal challenges and community backlash without meaningful additional public health benefit over well-implemented conditional exclusion policies.',
+      },
+      {
+        text: 'Encourage parents to look into vaccination — but leave the decision entirely to each family',
+        correct: false,
+        feedback: '✗ "Encouragement without accountability" has been shown repeatedly to be insufficient in communities with high philosophical exemption rates. When coverage falls below the herd immunity threshold, the community as a whole is at risk — including immunocompromised children who cannot be vaccinated. A structural policy is required, not just encouragement.',
+      },
+      {
+        text: 'Require 100% vaccination with no exemptions allowed under any circumstances',
+        correct: false,
+        feedback: '✗ While well-intentioned, zero-exemption mandates are rarely achievable in practice and may face legal challenges. More importantly, they can generate backlash that actually reduces willingness to vaccinate. The evidence-based recommendation is a policy with a clear, narrow exemption process (medical exemptions reviewed by a physician; philosophical exemptions require documented counseling) that makes it harder — but not impossible — to opt out.',
+      },
+    ],
+  },
+  {
+    speaker: 'MENTOR — DR. OKAFOR',
+    boxStyle: 'pixel-box',
+    text: `Your final and most challenging SOCO: "Vaccine-hesitant families in this community choose to vaccinate their children, based on accurate information and a trusting relationship with their healthcare providers."\n\nYou are drafting a public communication to the broader community — including families in the Facebook group. Which approach is most consistent with evidence-based health communication?`,
+    choices: [
+      {
+        text: 'Issue a statement that: (1) acknowledges parents\' genuine concerns, (2) provides clear factual information about measles risks and MMR safety in plain language, (3) corrects specific misinformation (autism claim, natural immunity claim) with evidence, and (4) directs parents to their own pediatrician for a personalized conversation — with a specific call to action to schedule a vaccination appointment',
+        correct: true,
+        xp: 50,
+        feedback: '✓ Correct. This response applies all 7 Cs and the SOCO framework. It Commands attention by addressing the real outbreak. It Clarifies the message (factual risks, corrected misinformation). It Communicates a benefit ("protect your child and others"). It maintains Consistency with CDC, AAP, and WHO guidance. It Caters to both HEART (acknowledges parental love and concern) and HEAD (evidence-based corrections). It Creates trust by using the pediatrician — the most trusted messenger — rather than relying solely on government authority. And it ends with a clear Call to action: schedule the appointment. The POINT is stated first: measles is dangerous and the MMR vaccine is safe and effective.',
+        casefile: 'Public communication: acknowledge concerns, factual corrections, pediatrician-led outreach, clear vaccination call to action.',
+      },
+      {
+        text: 'Publish a detailed scientific rebuttal of every anti-vaccine claim in the Facebook group, with citations from peer-reviewed journals',
+        correct: false,
+        feedback: '✗ Evidence alone rarely changes minds in vaccine-hesitant communities — and long, technical rebuttals can actually trigger the "backfire effect," causing people to dig deeper into their existing beliefs. WHO guidance emphasizes Catering to the HEART: people are motivated by emotion, values, and trust — not data dumps. The evidence must be presented in a way that connects emotionally with the audience\'s values, delivered by a trusted messenger.',
+      },
+      {
+        text: 'Post a counter-narrative in the Facebook group under an anonymous account to avoid escalating the conflict',
+        correct: false,
+        feedback: '✗ Anonymous communications violate the "Create trust" principle — one of the 7 Cs. Public health authority depends on credibility and transparency. If the account is later identified as a health department employee or official, the resulting scandal would cause far more damage to public trust than any initial conflict. Effective public health communication is always transparent about its source.',
+      },
+      {
+        text: 'Ignore the Facebook group entirely — engaging with misinformation only amplifies it',
+        correct: false,
+        feedback: '✗ The "don\'t feed the trolls" approach is not supported by public health communications research in outbreak settings. When misinformation is actively circulating, silence is interpreted as confirmation. WHO guidance is clear: correct misinformation promptly, using accurate information delivered through trusted channels. The goal is not to fight online but to reach hesitant parents through their pediatricians, schools, and community leaders.',
+      },
+    ],
   },
   {
     speaker: 'STATE HEALTH OFFICER',
     boxStyle: 'pixel-box-cyan',
     scene: 'measles_health_officer_close',
-    text: `Remarkable work, Detective. You successfully:\n\n• Calculated R₀, Rₑ, and herd immunity thresholds\n• Measured vaccine efficacy from outbreak data\n• Navigated vaccine hesitancy with evidence-based communication\n• Applied outbreak modeling to guide the vaccination campaign\n\nThis is the work of an Outbreak Specialist on their way to becoming a World-Class Disease Detective.`,
-    // Note: the press conference image for the measles case is measles_health_officer_close;
-    // the generic press scene key is still available for other use.
+    text: `Remarkable work, Detective. You successfully:\n\n• Calculated R₀, Rₑ, and the herd immunity threshold\n• Measured vaccine efficacy from real outbreak data\n• Navigated vaccine hesitancy using evidence-based communication\n• Applied outbreak modeling to guide the vaccination campaign\n\nYou are on your way to becoming a World-Class Disease Detective.`,
     xp: 400,
-    casefile: 'CASE 3 CLOSED. Measles outbreak terminated. Community coverage 94.5%. All core competencies demonstrated.',
+    casefile: 'CASE 4 CLOSED. Measles outbreak over. Coverage 94.5%. All core competencies demonstrated.',
   },
 ];
-
-// ── INIT ───────────────────────────────────────
-window.addEventListener('load', () => {
-  drawStars();
-  updateHUD();
-  showScreen('title-screen');
-  STATE.screen = 'title';
-
-  // Wire up rankup + victory buttons via addEventListener (belt-and-suspenders)
-  document.getElementById('rankup-continue-btn').addEventListener('click', () => {
-    playSFX('click');
-    showOutbreakSelect();
-  });
-  document.getElementById('victory-restart-btn').addEventListener('click', () => {
-    resetGame();
-  });
-
-  // Animate title stars
-  setInterval(() => {
-    if (STATE.screen === 'title') drawStars();
-  }, 2000);
-
-  // Resize handler for scene canvas
-  window.addEventListener('resize', () => {
-    if (STATE.screen === 'game' && STATE.currentCase) {
-      const sceneMap = { buffet: 'buffet', legionnaires: 'legionnaires', measles: 'measles' };
-      paintScene(sceneMap[STATE.currentCase] || 'lab');
-    }
-  });
-});
