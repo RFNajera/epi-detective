@@ -171,8 +171,10 @@ function initCasefile(caseId) {
 }
 
 function appendCasefile(text) {
-  STATE.casefileText += '- ' + text + '\n';
   const editor = document.getElementById('casefile-editor');
+  /* Always read current editor content first so student-typed notes are preserved */
+  if (editor) STATE.casefileText = editor.value;
+  STATE.casefileText += '- ' + text + '\n';
   if (editor) editor.value = STATE.casefileText;
 }
 
@@ -303,29 +305,52 @@ function renderFieldReference(caseId) {
   const content = document.getElementById('fieldref-content');
   if (!content || !caseId) return;
   const agents = FIELD_REFERENCE[caseId];
-  if (!agents || !agents.length) { content.innerHTML = '<p style="font-family:var(--font-body);color:var(--text-faint);font-size:13px;">No field reference available for this case.</p>'; return; }
+  if (!agents || !agents.length) {
+    content.innerHTML = '<p style="font-family:var(--font-body);color:var(--text-faint);font-size:13px;">No field reference available for this case.</p>';
+    return;
+  }
+
+  const agentsHtml = agents.map(a => `
+    <div class="agent-card">
+      <div class="agent-card-header" onclick="toggleAgentCard(this)">
+        ${a.name} <span class="toggle">+</span>
+      </div>
+      <div class="agent-card-body">
+        <span class="agent-label">Incubation</span><span class="agent-value">${a.incubation}</span>
+        <span class="agent-label">Route of Spread</span><span class="agent-value">${a.route}</span>
+        <span class="agent-label">Signs &amp; Symptoms</span><span class="agent-value">${a.symptoms}</span>
+        <span class="agent-label">Gram Stain / Type</span><span class="agent-value">${a.gram}</span>
+        <span class="agent-label">Lab Media</span><span class="agent-value">${a.media}</span>
+        <span class="agent-label">Morphology</span><span class="agent-value">${a.morphology}</span>
+        <span class="agent-label">Control Measures</span><span class="agent-value">${a.control}</span>
+        <span class="agent-label">Key Fact</span><span class="agent-value">${a.key}</span>
+      </div>
+    </div>`).join('');
 
   content.innerHTML = `
-    <div class="fieldref-section">
-      <div class="fieldref-section-header" onclick="toggleFieldSection(this)">
-        OUTBREAK INVESTIGATION BASICS <span class="toggle">+</span>
-      </div>
-      <div class="fieldref-section-body">
-        <h5>Ten Steps of an Outbreak Investigation (CDC)</h5>
-        <ol style="padding-left:18px;line-height:2">
-          <li>Prepare for fieldwork</li>
-          <li>Establish that an outbreak is occurring</li>
-          <li>Verify the diagnosis</li>
-          <li>Define a case and identify cases (case definition)</li>
-          <li>Describe the data by person, place, and time</li>
-          <li>Develop hypotheses about the source</li>
-          <li>Test hypotheses (analytic epidemiology: cohort or case-control study)</li>
-          <li>Refine hypotheses and carry out additional studies as needed</li>
-          <li>Implement control and prevention measures</li>
-          <li>Communicate findings (report, press release, MMWR)</li>
-        </ol>
-        <h5>Key Formulas</h5>
-        <div class="epi-curve-example">Attack Rate (AR) = (Cases ÷ Population at Risk) × 100%
+    <div class="fieldref-tab-bar">
+      <button class="fieldref-tab active" onclick="switchFieldTab(this,'tab-basics')">📋 Basics</button>
+      <button class="fieldref-tab" onclick="switchFieldTab(this,'tab-epicurve')">📈 Epi Curve</button>
+      <button class="fieldref-tab" onclick="switchFieldTab(this,'tab-agents')">🔬 Agents (${agents.length})</button>
+      <button class="fieldref-tab fieldref-tab-dl" onclick="downloadFieldRef()">⬇ Save .txt</button>
+    </div>
+
+    <div id="tab-basics" class="fieldref-tab-panel active">
+      <h5>Ten Steps of an Outbreak Investigation (CDC)</h5>
+      <ol style="padding-left:18px;line-height:2">
+        <li>Prepare for fieldwork</li>
+        <li>Establish that an outbreak is occurring</li>
+        <li>Verify the diagnosis</li>
+        <li>Define a case and identify cases (case definition)</li>
+        <li>Describe the data by person, place, and time</li>
+        <li>Develop hypotheses about the source</li>
+        <li>Test hypotheses (analytic epidemiology: cohort or case-control study)</li>
+        <li>Refine hypotheses and carry out additional studies as needed</li>
+        <li>Implement control and prevention measures</li>
+        <li>Communicate findings (report, press release, MMWR)</li>
+      </ol>
+      <h5>Key Formulas</h5>
+      <div class="epi-curve-example">Attack Rate (AR) = (Cases ÷ Population at Risk) × 100%
 
 Risk Ratio (RR) = AR in exposed ÷ AR in unexposed
   (Used in cohort studies and outbreak investigations)
@@ -334,86 +359,148 @@ Odds Ratio (OR) = (a × d) ÷ (b × c)  [from a 2×2 table]
   (Used in case-control studies)
 
 Vaccine Efficacy (VE) = (AR unvaccinated − AR vaccinated) ÷ AR unvaccinated × 100%</div>
-        <h5>Case Definition Components</h5>
-        <ul>
-          <li><strong>Clinical criteria</strong> — signs and symptoms that must be present</li>
-          <li><strong>Laboratory criteria</strong> — confirmed lab test results</li>
-          <li><strong>Epidemiologic linkage</strong> — time, place, and person connections</li>
-          <li><strong>Classification</strong> — Confirmed / Probable / Suspected</li>
-        </ul>
-      </div>
+      <h5>Case Definition Components</h5>
+      <ul>
+        <li><strong>Clinical criteria</strong> — signs and symptoms that must be present</li>
+        <li><strong>Laboratory criteria</strong> — confirmed lab test results</li>
+        <li><strong>Epidemiologic linkage</strong> — time, place, and person connections</li>
+        <li><strong>Classification</strong> — Confirmed / Probable / Suspected</li>
+      </ul>
     </div>
 
-    <div class="fieldref-section">
-      <div class="fieldref-section-header" onclick="toggleFieldSection(this)">
-        HOW TO READ AN EPI CURVE <span class="toggle">+</span>
-      </div>
-      <div class="fieldref-section-body">
-        <h5>What is an Epidemic Curve?</h5>
-        <p>An epidemic curve (epi curve) is a bar chart (histogram) that shows how many new cases occurred over time. Each bar represents the number of new cases in a set time interval. It tells you the pattern, size, and timing of an outbreak.</p>
-
-        <h5>Pattern 1 — Point Source</h5>
-        <div class="epi-curve-example"><strong>Shape:</strong> Single sharp peak; cases are all clustered within one incubation period of each other.
+    <div id="tab-epicurve" class="fieldref-tab-panel">
+      <h5>What is an Epidemic Curve?</h5>
+      <p>An epidemic curve (epi curve) is a bar chart (histogram) that shows how many new cases occurred over time. Each bar represents the number of new cases in a set time interval. It tells you the pattern, size, and timing of an outbreak.</p>
+      <h5>Pattern 1 — Point Source</h5>
+      <div class="epi-curve-example"><strong>Shape:</strong> Single sharp peak; cases are all clustered within one incubation period of each other.
 <strong>What it means:</strong> Everyone was exposed to the same source at one specific time and place (e.g., a buffet lunch, a single batch of contaminated pruno).
 <strong>Real-world example:</strong> A foodborne illness outbreak at a catered event.</div>
-
-        <h5>Pattern 2 — Propagated (Person-to-Person)</h5>
-        <div class="epi-curve-example"><strong>Shape:</strong> Multiple waves of cases, each wave separated by approximately one incubation period.
+      <h5>Pattern 2 — Propagated (Person-to-Person)</h5>
+      <div class="epi-curve-example"><strong>Shape:</strong> Multiple waves of cases, each wave separated by approximately one incubation period.
 <strong>What it means:</strong> Each case infects new people who then become new sources; the outbreak grows in "generations."
 <strong>Real-world examples:</strong> Norovirus in a dormitory, measles in a school, COVID-19.</div>
-
-        <h5>Pattern 3 — Continuous Common Source</h5>
-        <div class="epi-curve-example"><strong>Shape:</strong> A prolonged plateau or gradual rise and fall over multiple incubation periods.
+      <h5>Pattern 3 — Continuous Common Source</h5>
+      <div class="epi-curve-example"><strong>Shape:</strong> A prolonged plateau or gradual rise and fall over multiple incubation periods.
 <strong>What it means:</strong> People are being exposed continuously or intermittently to the same contaminated source over time.
 <strong>Real-world examples:</strong> A contaminated water supply or cooling tower.</div>
-
-        <h5>Key Measurements You Can Read from an Epi Curve</h5>
-        <ul>
-          <li><strong>Incubation period</strong> — the time from exposure to when symptoms appear; helps narrow down the likely pathogen.</li>
-          <li><strong>Period of exposure</strong> — count backward from the earliest cases by one incubation period to estimate when exposure occurred.</li>
-          <li><strong>Peak</strong> — the day or time with the highest number of new cases.</li>
-          <li><strong>Tail</strong> — late cases may suggest secondary (person-to-person) spread or an outlier exposure.</li>
-        </ul>
-
-        <h5>Incubation Period Quick Reference</h5>
-        <div class="epi-curve-example">Staphylococcus aureus: 1–6 hours
-Clostridium perfringens: 6–24 hours
-Salmonella: 6–72 hours
-Norovirus: 12–48 hours
-Shigella: 12–96 hours
-E. coli O157:H7: 2–8 days
-Botulism: 6 hours to 10 days
-Campylobacter: 1–10 days
-Legionella: 2–10 days
-Hepatitis A: 15–50 days
-Measles: 7–21 days</div>
-      </div>
+      <h5>Key Measurements from an Epi Curve</h5>
+      <ul>
+        <li><strong>Incubation period</strong> — time from exposure to symptoms; helps narrow the likely pathogen.</li>
+        <li><strong>Period of exposure</strong> — count backward from the earliest cases by one incubation period.</li>
+        <li><strong>Peak</strong> — the time interval with the highest number of new cases.</li>
+        <li><strong>Tail</strong> — late cases may suggest secondary spread or an outlier exposure.</li>
+      </ul>
+      <h5>Incubation Period Quick Reference</h5>
+      <div class="epi-curve-example">Staphylococcus aureus:    1–6 hours
+Clostridium perfringens:  6–24 hours
+Salmonella:               6–72 hours
+Norovirus:                12–48 hours
+Shigella:                 12–96 hours
+E. coli O157:H7:          2–8 days
+Botulism:                 6 hours–10 days
+Campylobacter:            1–10 days
+Legionella:               2–10 days
+Hepatitis A:              15–50 days
+Measles:                  7–21 days</div>
     </div>
 
-    <div class="fieldref-section">
-      <div class="fieldref-section-header" onclick="toggleFieldSection(this)">
-        AGENTS FOR THIS OUTBREAK (${agents.length} pathogens) <span class="toggle">+</span>
-      </div>
-      <div class="fieldref-section-body">
-        ${agents.map(a => `
-          <div class="agent-card">
-            <div class="agent-card-header" onclick="toggleAgentCard(this)">
-              ${a.name} <span class="toggle">+</span>
-            </div>
-            <div class="agent-card-body">
-              <span class="agent-label">Incubation</span><span class="agent-value">${a.incubation}</span>
-              <span class="agent-label">Route of Spread</span><span class="agent-value">${a.route}</span>
-              <span class="agent-label">Signs & Symptoms</span><span class="agent-value">${a.symptoms}</span>
-              <span class="agent-label">Gram Stain / Type</span><span class="agent-value">${a.gram}</span>
-              <span class="agent-label">Lab Media</span><span class="agent-value">${a.media}</span>
-              <span class="agent-label">Morphology</span><span class="agent-value">${a.morphology}</span>
-              <span class="agent-label">Control Measures</span><span class="agent-value">${a.control}</span>
-              <span class="agent-label">Key Fact</span><span class="agent-value">${a.key}</span>
-            </div>
-          </div>`).join('')}
-      </div>
+    <div id="tab-agents" class="fieldref-tab-panel">
+      ${agentsHtml}
     </div>
   `;
+}
+
+function switchFieldTab(btn, tabId) {
+  const panel = document.getElementById('fieldref-content');
+  if (!panel) return;
+  panel.querySelectorAll('.fieldref-tab').forEach(t => t.classList.remove('active'));
+  panel.querySelectorAll('.fieldref-tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  const target = document.getElementById(tabId);
+  if (target) target.classList.add('active');
+}
+
+function downloadFieldRef() {
+  const caseId = window.STATE && STATE.currentCase;
+  const agents = caseId && FIELD_REFERENCE[caseId] ? FIELD_REFERENCE[caseId] : [];
+  const agentsTxt = agents.map(a =>
+    `--- ${a.name} ---\nIncubation: ${a.incubation}\nRoute: ${a.route}\nSymptoms: ${a.symptoms}\nGram Stain/Type: ${a.gram}\nLab Media: ${a.media}\nMorphology: ${a.morphology}\nControl: ${a.control}\nKey Fact: ${a.key}\n`
+  ).join('\n');
+
+  const txt = `EPI DETECTIVE — FIELD REFERENCE
+================================
+
+SECTION 1: OUTBREAK INVESTIGATION BASICS
+-----------------------------------------
+Ten Steps of an Outbreak Investigation (CDC):
+ 1. Prepare for fieldwork
+ 2. Establish that an outbreak is occurring
+ 3. Verify the diagnosis
+ 4. Define a case and identify cases
+ 5. Describe the data by person, place, and time
+ 6. Develop hypotheses about the source
+ 7. Test hypotheses (cohort or case-control study)
+ 8. Refine hypotheses and carry out additional studies
+ 9. Implement control and prevention measures
+10. Communicate findings (report, press release, MMWR)
+
+Key Formulas:
+  Attack Rate (AR)     = (Cases / Population at Risk) x 100%
+  Risk Ratio (RR)      = AR in exposed / AR in unexposed
+  Odds Ratio (OR)      = (a x d) / (b x c)  [from a 2x2 table]
+  Vaccine Efficacy (VE)= (AR unvaccinated - AR vaccinated) / AR unvaccinated x 100%
+
+Case Definition Components:
+  - Clinical criteria: signs and symptoms that must be present
+  - Laboratory criteria: confirmed lab test results
+  - Epidemiologic linkage: time, place, and person connections
+  - Classification: Confirmed / Probable / Suspected
+
+
+SECTION 2: HOW TO READ AN EPI CURVE
+--------------------------------------
+An epi curve is a bar chart (histogram) showing new cases over time.
+
+Pattern 1 - Point Source:
+  Shape: Single sharp peak within one incubation period.
+  Meaning: Everyone exposed to the same source at one time/place.
+  Example: Foodborne illness at a catered event.
+
+Pattern 2 - Propagated (Person-to-Person):
+  Shape: Multiple waves separated by ~one incubation period.
+  Meaning: Each case infects new people; outbreak grows in generations.
+  Examples: Norovirus, measles, COVID-19.
+
+Pattern 3 - Continuous Common Source:
+  Shape: Prolonged plateau over multiple incubation periods.
+  Meaning: Ongoing exposure to the same contaminated source.
+  Examples: Contaminated water supply, cooling tower.
+
+Incubation Period Quick Reference:
+  Staph aureus:         1-6 hours
+  C. perfringens:       6-24 hours
+  Salmonella:           6-72 hours
+  Norovirus:            12-48 hours
+  Shigella:             12-96 hours
+  E. coli O157:H7:      2-8 days
+  Botulism:             6 hours - 10 days
+  Campylobacter:        1-10 days
+  Legionella:           2-10 days
+  Hepatitis A:          15-50 days
+  Measles:              7-21 days
+
+
+SECTION 3: AGENTS FOR THIS OUTBREAK
+--------------------------------------
+${agentsTxt}
+`;
+
+  const blob = new Blob([txt], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `epi-detective-field-reference-${caseId || 'general'}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 function toggleAgentCard(header) {
@@ -847,51 +934,22 @@ document.addEventListener('keydown', e => {
 
   if (STATE.screen === 'game') {
     if (key === 'Enter' || key === ' ') {
-      e.preventDefault();
-      const promptEl = document.getElementById('continue-prompt');
-      if (promptEl && promptEl.style.display !== 'none') {
-        handleContinue();
+      /* Only fire Enter/Space if the notes textarea is NOT focused */
+      const active = document.activeElement;
+      const inTextarea = active && active.tagName === 'TEXTAREA';
+      if (!inTextarea) {
+        e.preventDefault();
+        const promptEl = document.getElementById('continue-prompt');
+        if (promptEl && promptEl.style.display !== 'none') {
+          handleContinue();
+        }
       }
       return;
     }
-
-    if (/^[1-4]$/.test(key)) {
-      const idx = parseInt(key) - 1;
-      const btns = document.querySelectorAll('#choices-panel .choice-btn:not([disabled])');
-      if (btns[idx]) { e.preventDefault(); btns[idx].click(); }
-      return;
-    }
-
-    if (key === 'n' || key === 'N') {
-      if (typeof togglePanel === 'function') { togglePanel('casefile-panel'); }
-      else {
-        const cf = document.getElementById('casefile-panel');
-        const nowVisible = window.getComputedStyle(cf).display !== 'none';
-        cf.style.display = nowVisible ? 'none' : 'block';
-      }
-      return;
-    }
-
-    if (key === 'r' || key === 'R') {
-      if (typeof togglePanel === 'function') { togglePanel('fieldref-panel'); return; }
-      const fp = document.getElementById('fieldref-panel');
-      const isHidden = window.getComputedStyle(fp).display === 'none';
-      if (isHidden) {
-        renderFieldReference(STATE.currentCase);
-        fp.style.display = 'block';
-      } else {
-        fp.style.display = 'none';
-      }
-      return;
-    }
-
-    if (key === 'd' || key === 'D') {
-      if (typeof togglePanel === 'function') { togglePanel('tools-panel'); return; }
-      const tp = document.getElementById('tools-panel');
-      STATE.toolsUserHidden = window.getComputedStyle(tp).display !== 'none';
-      tp.style.display = STATE.toolsUserHidden ? 'none' : 'flex';
-      return;
-    }
+    /* Number keys 1-4 and panel shortcuts (N/R/D) are intentionally removed.
+       Panels are opened via the toolbar buttons only.
+       Answer choices are selected by clicking/tapping buttons only.
+       This prevents accidental answer submission or panel toggling while typing notes. */
   }
 });
 
