@@ -1,17 +1,17 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="description" content="An 8-bit retro-style RPG where the player works through an epidemic.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://coding.epidemiological.net/epi-detective/">
-<meta property="og:title" content="Epi Detective v1.1">
+<meta property="og:title" content="Epi Detective v1.5">
 <meta property="og:description" content="An 8-bit retro-style RPG where the player works through an epidemic.">
 <meta property="og:image" content="https://coding.epidemiological.net/epi-detective/media/social_share.jpg">
-<meta property="og:image:alt" content="Cover image for Epi Detective v1.1, an 8-bit retro-style RPG about working through an epidemic.">
+<meta property="og:image:alt" content="Cover image for Epi Detective v1.5, an 8-bit retro-style RPG about epidemic investigation.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Epi Detective v1.1">
+<meta name="twitter:title" content="Epi Detective v1.5">
 <meta name="twitter:description" content="An 8-bit retro-style RPG where the player works through an epidemic.">
 <meta name="twitter:image" content="https://coding.epidemiological.net/epi-detective/media/social_share.jpg">
 <title>EPI DETECTIVE — Disease Investigation RPG</title>
@@ -24,7 +24,7 @@
 
   <!-- HUD BAR -->
   <div id="hud" class="pixel-box">
-    <div id="hud-logo">EPI DETECTIVE v1.1</div>
+    <div id="hud-logo">EPI DETECTIVE v1.5</div>
     <div id="hud-right">
       <div class="hud-stat">
         <span class="hud-stat-label">RANK</span>
@@ -32,7 +32,7 @@
       </div>
       <div class="hud-stat">
         <span class="hud-stat-label">SOLVED</span>
-        <span class="hud-stat-value" id="hud-cases">0/3</span>
+        <span class="hud-stat-value" id="hud-cases">0/4</span>
       </div>
       <div class="hud-stat">
         <span class="hud-stat-label">SCORE</span>
@@ -48,92 +48,116 @@
   <!-- MAIN VIEWPORT -->
   <div id="viewport">
 
-    <!-- TITLE SCREEN -->
-    <div id="title-screen" class="pixel-box">
-      <canvas id="star-canvas" width="860" height="160" style="position:absolute;top:0;left:0;opacity:0.6;"></canvas>
-      <div class="title-logo animate-fadein">
-        <div class="title-main">🔬 EPI DETECTIVE</div>
-        <div class="title-sub">DISEASE INVESTIGATION RPG</div>
-      </div>
-      <div class="title-tagline animate-fadein">
-        From rookie disease investigator to world-class disease detective —<br>
-        solve outbreaks, master epidemiology, save lives.
-      </div>
-      <div class="title-press-start blink">▶ PRESS ENTER OR CLICK TO START</div>
-      <div class="title-credits">
-        v1.1 · Graduate Epidemiology Training Edition<br>
-        Master epi curves · odds ratios · attack rates · outbreak investigation
-      </div>
-    </div>
-
     <!-- OUTBREAK SELECT SCREEN -->
-    <div id="outbreak-select" class="pixel-box">
+    <div id="outbreak-select" class="pixel-box" style="display:none;">
       <div style="font-size:9px; color:var(--cyan); text-align:center; margin-bottom:4px;">SELECT OUTBREAK TO INVESTIGATE</div>
-      <div style="font-size:7px; color:var(--text-faint); text-align:center; margin-bottom:12px; font-family:var(--font-mono)">Complete cases to unlock new outbreaks and advance your rank</div>
+      <div style="font-size:7px; color:var(--text-faint); text-align:center; margin-bottom:12px; font-family:var(--font-mono)">Tap a case or press 1–4 · Complete both easy cases to unlock medium · Finish medium to unlock hard</div>
 
-      <button class="outbreak-card unlocked" id="case-buffet" onclick="startCase('buffet')">
-        <div>
-          <div class="outbreak-difficulty diff-easy">EASY</div>
-        </div>
-        <div class="outbreak-info">
-          <div class="outbreak-name">CASE 1: THE BANQUET INCIDENT</div>
-          <div class="outbreak-desc">34 attendees of a corporate buffet lunch report sudden-onset diarrhea. Identify the source food, calculate attack rates, and stop the outbreak.</div>
-          <div class="outbreak-xp">+150 XP · Skills: Attack Rate, 2×2 Tables, Food-borne Illness</div>
-        </div>
-        <div id="case-buffet-status" style="font-size:7px; color:var(--green);">OPEN</div>
-      </button>
+      <!-- Case 1: The Banquet Incident (easy) -->
+      <div class="outbreak-card-wrap" id="case-wrap-buffet">
+        <div class="outbreak-key-badge" id="key-buffet">1</div>
+        <button class="outbreak-card unlocked" id="case-buffet" onclick="tryStartCase('buffet')">
+          <div>
+            <div class="outbreak-difficulty diff-easy">EASY</div>
+          </div>
+          <div class="outbreak-info">
+            <div class="outbreak-name">CASE 1: THE BANQUET INCIDENT</div>
+            <div class="outbreak-desc">34 attendees of a corporate buffet lunch report sudden-onset diarrhea. Identify the source food, calculate attack rates, and stop the outbreak.</div>
+            <div class="outbreak-xp">+150 XP · Skills: Attack Rate, 2×2 Tables, Foodborne Illness</div>
+          </div>
+          <div id="case-buffet-status" class="case-status-open">OPEN</div>
+        </button>
+      </div>
 
-      <button class="outbreak-card locked" id="case-legionnaires" onclick="startCase('legionnaires')">
-        <div>
-          <div class="outbreak-difficulty diff-medium">MEDIUM</div>
-        </div>
-        <div class="outbreak-info">
-          <div class="outbreak-name">CASE 2: CITY CENTER CLUSTER</div>
-          <div class="outbreak-desc">A cluster of severe pneumonia cases appears in a downtown hotel. Long incubation periods and an environmental source make this investigation complex.</div>
-          <div class="outbreak-xp">+250 XP · Skills: Epi Curve, Incubation Period, Environmental Investigation</div>
-        </div>
-        <div id="case-legionnaires-status" style="font-size:7px; color:var(--text-faint);">🔒 LOCKED</div>
-      </button>
+      <!-- Case 2: The Pruno Incident (easy) -->
+      <div class="outbreak-card-wrap" id="case-wrap-pruno">
+        <div class="outbreak-key-badge" id="key-pruno">2</div>
+        <button class="outbreak-card unlocked" id="case-pruno" onclick="tryStartCase('pruno')">
+          <div>
+            <div class="outbreak-difficulty diff-easy">EASY</div>
+          </div>
+          <div class="outbreak-info">
+            <div class="outbreak-name">CASE 2: THE PRUNO INCIDENT</div>
+            <div class="outbreak-desc">Eight inmates at a state correctional facility develop double vision, difficulty swallowing, and descending paralysis. A homemade fermented beverage may be to blame.</div>
+            <div class="outbreak-xp">+150 XP · Skills: Botulism, Toxin Testing, Prison Outbreak Response</div>
+          </div>
+          <div id="case-pruno-status" class="case-status-open">OPEN</div>
+        </button>
+      </div>
 
-      <button class="outbreak-card locked" id="case-measles" onclick="startCase('measles')">
-        <div>
-          <div class="outbreak-difficulty diff-hard">HARD</div>
-        </div>
-        <div class="outbreak-info">
-          <div class="outbreak-name">CASE 3: THE VACCINE HESITANCY CRISIS</div>
-          <div class="outbreak-desc">Measles spreads through a school with low vaccination coverage. Contend with vaccine-hesitant parents, social media misinformation, and a shrinking herd immunity threshold.</div>
-          <div class="outbreak-xp">+400 XP · Skills: R₀, Herd Immunity, Risk Communication, Vaccine Efficacy</div>
-        </div>
-        <div id="case-measles-status" style="font-size:7px; color:var(--text-faint);">🔒 LOCKED</div>
-      </button>
+      <!-- Case 3: City Center Cluster (medium) -->
+      <div class="outbreak-card-wrap" id="case-wrap-legionnaires">
+        <div class="outbreak-key-badge" id="key-legionnaires">3</div>
+        <button class="outbreak-card locked" id="case-legionnaires" onclick="tryStartCase('legionnaires')">
+          <div>
+            <div class="outbreak-difficulty diff-medium">MEDIUM</div>
+          </div>
+          <div class="outbreak-info">
+            <div class="outbreak-name">CASE 3: CITY CENTER CLUSTER</div>
+            <div class="outbreak-desc">A cluster of severe pneumonia cases appears near a downtown hotel. Long incubation periods and an environmental source make this investigation complex.</div>
+            <div class="outbreak-xp">+250 XP · Skills: Epi Curve, Incubation Period, Environmental Investigation</div>
+          </div>
+          <div id="case-legionnaires-status" class="case-status-locked">LOCKED</div>
+        </button>
+      </div>
+
+      <!-- Case 4: The Vaccine Hesitancy Crisis (hard) -->
+      <div class="outbreak-card-wrap" id="case-wrap-measles">
+        <div class="outbreak-key-badge" id="key-measles">4</div>
+        <button class="outbreak-card locked" id="case-measles" onclick="tryStartCase('measles')">
+          <div>
+            <div class="outbreak-difficulty diff-hard">HARD</div>
+          </div>
+          <div class="outbreak-info">
+            <div class="outbreak-name">CASE 4: THE VACCINE HESITANCY CRISIS</div>
+            <div class="outbreak-desc">Measles spreads through a school with low vaccination coverage. Contend with vaccine-hesitant parents, social media misinformation, and a shrinking herd immunity threshold.</div>
+            <div class="outbreak-xp">+400 XP · Skills: R₀, Herd Immunity, Risk Communication, Vaccine Efficacy</div>
+          </div>
+          <div id="case-measles-status" class="case-status-locked">LOCKED</div>
+        </button>
+      </div>
+
+      <!-- Lock flash message -->
+      <div id="lock-flash"></div>
     </div>
 
     <!-- GAME SCENE: art + dialog + choices -->
     <div id="game-scene" style="display:none; flex-direction:column; gap:8px;">
 
-      <!-- Scene art: pixel-drawn canvas fallback + optional 8-bit panel image overlay -->
+      <!-- Scene art -->
       <div id="scene-wrap" style="position:relative; width:100%;">
-        <canvas id="scene-canvas" height="160" class="pixel-box" style="width:100%; display:block;"></canvas>
+        <canvas id="scene-canvas" height="240" class="pixel-box" style="width:100%; display:block;"></canvas>
         <img id="scene-panel"
              src=""
              alt=""
-             style="display:none; position:absolute; top:0; left:0; width:100%; height:160px; object-fit:cover; image-rendering:pixelated; border:2px solid var(--border);">
+             style="display:none; position:absolute; top:0; left:0; width:100%; height:240px; object-fit:cover; image-rendering:pixelated; border:2px solid var(--border);">
       </div>
 
-      <!-- Casefile / notebook -->
+      <!-- Mobile tool buttons (visible on touch / small screens) -->
+      <div id="mobile-tool-bar">
+        <button class="mobile-tool-btn" onclick="togglePanel('casefile-panel')">📋 Notes</button>
+        <button class="mobile-tool-btn" onclick="togglePanel('fieldref-panel')">📖 Field Ref</button>
+        <button class="mobile-tool-btn" onclick="togglePanel('tools-panel')">📊 Data</button>
+      </div>
+
+      <!-- Casefile / notebook (editable) -->
       <div id="casefile-panel" class="pixel-box">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-          <h3 style="margin:0;">📋 INVESTIGATION NOTES</h3>
-          <button class="dl-btn" onclick="downloadNotebook()" title="Download notebook as .txt">⬇ SAVE NOTES</button>
+        <div class="casefile-header">
+          <h3>📋 INVESTIGATION NOTES</h3>
+          <div class="casefile-btn-group">
+            <button class="dl-btn secondary" onclick="toggleMdGuide()">? Markdown</button>
+            <button class="dl-btn" onclick="downloadNotebook()">⬇ SAVE .md</button>
+          </div>
         </div>
-        <div id="casefile-entries"></div>
+        <div id="md-guide"></div>
+        <textarea id="casefile-editor" placeholder="Your investigation notes will appear here as you play. You can also type freely — these are YOUR notes."></textarea>
       </div>
 
-      <!-- Field Reference (handbook) panel -->
-      <div id="fieldref-panel" class="pixel-box" style="display:none; border-color:#7755cc; box-shadow:0 0 12px rgba(119,85,204,0.25),4px 4px 0 4px rgba(0,0,0,0.8);">
+      <!-- Field Reference panel -->
+      <div id="fieldref-panel" class="pixel-box" style="display:none; border-color:#7755cc; box-shadow:0 0 12px rgba(119,85,204,0.25),4px 4px 0 4px rgba(0,0,0,0.08);">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-          <div style="font-family:var(--font-pixel);font-size:8px;color:#bb99ff;text-shadow:0 0 8px #7755cc;">📖 CCDM FIELD REFERENCE</div>
-          <div style="font-family:var(--font-pixel);font-size:6px;color:var(--text-faint);">Control of Communicable Diseases Manual — [R] to close</div>
+          <div style="font-family:var(--font-pixel);font-size:8px;color:#bb99ff;">📖 CCDM FIELD REFERENCE</div>
+          <div style="font-family:var(--font-pixel);font-size:6px;color:var(--text-faint);">Press R or tap Field Ref to close</div>
         </div>
         <div id="fieldref-content"></div>
       </div>
@@ -153,8 +177,18 @@
       <div id="text-box" class="pixel-box pixel-box-green">
         <div id="speaker-name"></div>
         <div id="dialog-text"></div>
-        <div id="continue-prompt" class="blink" style="display:none;">▼ PRESS ENTER OR SPACE</div>
+        <div id="continue-prompt" class="blink" style="display:none;">▼ TAP HERE OR PRESS ENTER</div>
       </div>
+
+      <!-- Make the text box itself tappable to advance -->
+      <script>
+        document.addEventListener('DOMContentLoaded', function() {
+          document.getElementById('text-box').addEventListener('click', function() {
+            const promptEl = document.getElementById('continue-prompt');
+            if (promptEl && promptEl.style.display !== 'none') handleContinue();
+          });
+        });
+      </script>
 
       <!-- Choices panel -->
       <div id="choices-panel"></div>
@@ -172,7 +206,7 @@
       </button>
     </div>
 
-    <!-- GAME OVER / VICTORY -->
+    <!-- VICTORY SCREEN -->
     <div id="victory-screen" style="display:none; flex-direction:column; align-items:center; gap:16px; padding:32px; text-align:center;">
       <div style="font-size:14px; color:var(--magenta); text-shadow:0 0 16px var(--magenta);">🏆 WORLD-CLASS DISEASE DETECTIVE</div>
       <div id="victory-text" style="font-family:var(--font-mono); font-size:14px; color:var(--text-dim); max-width:560px; line-height:1.7;"></div>
@@ -188,7 +222,7 @@
   <div id="action-bar" class="pixel-box">
     <div id="key-hints">
       <div class="key-hint"><span class="key-badge">ENTER</span> Continue</div>
-      <div class="key-hint"><span class="key-badge">1-4</span> Select answer</div>
+      <div class="key-hint"><span class="key-badge">1–4</span> Select answer</div>
       <div class="key-hint"><span class="key-badge">N</span> Notes</div>
       <div class="key-hint"><span class="key-badge">R</span> Field Ref</div>
       <div class="key-hint"><span class="key-badge">D</span> Data</div>
@@ -200,154 +234,357 @@
 
 <script src="js/game.js"></script>
 
-<!-- Mobile warning overlay -->
-<div id="mobile-warning" style="display:none;">
-  <div id="mobile-warning-box">
-    <div id="mobile-warning-icon">🖥️</div>
-    <div id="mobile-warning-title">DESKTOP ONLY</div>
-    <div id="mobile-warning-sub">EPI DETECTIVE</div>
-    <p id="mobile-warning-msg">
-      This game requires a keyboard and a desktop browser.<br><br>
-      Please open it on a laptop or desktop computer
-      for the full experience.
-    </p>
-    <div id="mobile-warning-hint">Designed for Chrome, Firefox, Edge &amp; Safari on desktop</div>
-  </div>
-</div>
-
 <script>
-(function() {
-  function isMobile() {
-    return window.matchMedia('(max-width: 900px), (pointer: coarse)').matches;
+/* Panel toggle helper used by mobile tool buttons and keyboard shortcuts */
+function togglePanel(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+
+  /* Use computed style so CSS-default display:none and inline display:none both register */
+  const computed = window.getComputedStyle(el).display;
+  const isHidden = computed === 'none';
+
+  if (isHidden) {
+    /* Opening */
+    if (id === 'fieldref-panel') {
+      if (typeof renderFieldReference === 'function' && window.STATE) {
+        renderFieldReference(STATE.currentCase);
+      }
+    }
+    el.style.display = (id === 'tools-panel') ? 'flex' : 'block';
+    /* Scroll the panel into view on mobile */
+    setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50);
+  } else {
+    el.style.display = 'none';
   }
-  function check() {
-    document.getElementById('mobile-warning').style.display = isMobile() ? 'flex' : 'none';
-  }
-  check();
-  window.addEventListener('resize', check);
-})();
+}
 </script>
 <script data-pplx-inline-edit>
-(function(){
-  if(window===window.top)return;
-  function inlineAll(orig,clone){
-    if(orig.nodeType!==1)return;
-    try{
-      var cs=getComputedStyle(orig);
-      var t='';
-      for(var i=0;i<cs.length;i++){t+=cs[i]+':'+cs.getPropertyValue(cs[i])+';';}
-      clone.style.cssText=t;
-    }catch(e){}
-    var oc=orig.children,cc=clone.children;
-    for(var j=0;j<oc.length&&j<cc.length;j++){inlineAll(oc[j],cc[j]);}
-  }
-  function stripExternal(clone){
-    var imgs=clone.querySelectorAll('img');
-    for(var i=0;i<imgs.length;i++){
-      var s=imgs[i].getAttribute('src');
-      if(s&&!s.startsWith('data:'))imgs[i].removeAttribute('src');
+(function () {
+  if (window === window.top) return;
+
+  const allowedParentOrigins = ["https://www.perplexity.ai","https://perplexity.ai","https://testing.perplexity.ai","https://staging.perplexity.ai","https://*.preview.i.perplexity.ai","http://localhost:3000","http://127.0.0.1:3000","http://localhost:5173","http://127.0.0.1:5173"];
+  const MAX_FONT_BYTES = 500 * 1024;
+  const MAX_TOTAL_FONT_BYTES = 2 * 1024 * 1024;
+  let scrollForwarding = false;
+  let scrollRaf = 0;
+  let trustedTopOrigin = null;
+
+  // Allow entries like "https://*.preview.i.perplexity.ai" — the wildcard
+  // matches a single DNS label (no dots), so "https://*.foo" cannot stretch
+  // across multiple labels.
+  function matchesAllowedOrigin(origin) {
+    if (!origin) return false;
+    for (const entry of allowedParentOrigins) {
+      if (!entry.includes("*")) {
+        if (entry === origin) return true;
+        continue;
+      }
+      const pattern = new RegExp(
+        "^" +
+          entry.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^.]+") +
+          "$",
+      );
+      if (pattern.test(origin)) return true;
     }
-    var all=clone.querySelectorAll('*');
-    for(var i=0;i<all.length;i++){
-      var st=all[i].style.cssText;
-      if(st&&st.indexOf('url(')>=0){
-        all[i].style.cssText=st.replace(/url\(["']?(?!data:)[^)"']*["']?\)/gi,'none');
+    return false;
+  }
+
+  // Trust decision: when the sender is same-origin-visible (event.origin is a
+  // real origin like https://www.perplexity.ai) we trust event.origin directly.
+  // When event.origin is "null" (opaque broker srcdoc), we fall back to the
+  // broker's stamped `parentOrigin` to identify the top window. The fallback
+  // is claim-only — we rely on the browser's native `targetOrigin` enforcement
+  // on the response path (see postToTrustedTop) to ensure replies can't be
+  // delivered to anyone but the actual top window of that claimed origin.
+  function getTrustedParentOrigin(event) {
+    const forwardedParentOrigin =
+      typeof event.data.parentOrigin === "string" ? event.data.parentOrigin : null;
+    const parentOrigin = event.origin === "null" ? forwardedParentOrigin : event.origin;
+    return matchesAllowedOrigin(parentOrigin) ? parentOrigin : null;
+  }
+
+  // All responses go to window.top with targetOrigin = the allowlisted origin.
+  // An attacker that iframes us inside their own null-origin broker can claim
+  // any parentOrigin they like, but the browser will drop the reply whenever
+  // the real top's origin doesn't match — so the screenshot never leaves.
+  function postToTrustedTop(message) {
+    if (!trustedTopOrigin) return;
+    try {
+      window.top.postMessage(message, trustedTopOrigin);
+    } catch (_error) {}
+  }
+
+  function inlineAll(original, clone) {
+    if (original.nodeType !== 1 || clone.nodeType !== 1) return;
+
+    try {
+      const computedStyle = getComputedStyle(original);
+      // cssText on a computed style is the serialized declaration in modern
+      // Chromium/Safari — a single read beats enumerating ~400 longhand
+      // properties. Firefox returns "" here, so we fall back on empty.
+      const serialized = computedStyle.cssText;
+      if (serialized) {
+        clone.style.cssText = serialized;
+      } else {
+        const parts = new Array(computedStyle.length);
+        for (let index = 0; index < computedStyle.length; index += 1) {
+          const property = computedStyle[index];
+          parts[index] = `${property}:${computedStyle.getPropertyValue(property)};`;
+        }
+        clone.style.cssText = parts.join("");
+      }
+    } catch (_error) {}
+
+    const originalChildren = original.children;
+    const clonedChildren = clone.children;
+    for (
+      let index = 0;
+      index < originalChildren.length && index < clonedChildren.length;
+      index += 1
+    ) {
+      inlineAll(originalChildren[index], clonedChildren[index]);
+    }
+  }
+
+  function extractFontUrl(srcValue) {
+    const matches = [
+      ...srcValue.matchAll(
+        /url\(["']?([^"')]+)["']?\)(?:\s*format\(["']?([^"')]+)["']?\))?/gi,
+      ),
+    ];
+    if (matches.length === 0) return null;
+    const woff2 = matches.find((m) => m[2] && m[2].toLowerCase().includes("woff2"));
+    if (woff2) return woff2[1];
+    const woff = matches.find((m) => m[2] && m[2].toLowerCase().includes("woff"));
+    if (woff) return woff[1];
+    return matches[0][1];
+  }
+
+  // Cache resolved font URL -> data URI across captures. Fonts on a page
+  // essentially never change, and a batch run emits multiple captures back to
+  // back — without this we'd refetch + re-base64 every time.
+  const fontDataUriCache = new Map();
+  const SRC_DECLARATION_RE = /src\s*:\s*[^;}]+/i;
+
+  async function fetchAsDataUri(url) {
+    if (fontDataUriCache.has(url)) return fontDataUriCache.get(url);
+    let dataUri = null;
+    try {
+      const response = await fetch(url, { mode: "cors", credentials: "omit" });
+      if (response.ok) {
+        const blob = await response.blob();
+        if (blob.size <= MAX_FONT_BYTES) {
+          dataUri = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () =>
+              resolve(typeof reader.result === "string" ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+        }
+      }
+    } catch (_error) {
+      dataUri = null;
+    }
+    fontDataUriCache.set(url, dataUri);
+    return dataUri;
+  }
+
+  function collectFontFaceRuleTexts() {
+    const rules = [];
+    for (const sheet of document.styleSheets) {
+      let cssRules;
+      try {
+        cssRules = sheet.cssRules;
+      } catch (_error) {
+        continue;
+      }
+      if (!cssRules) continue;
+      for (const rule of cssRules) {
+        const cssText = rule.cssText || "";
+        if (cssText.startsWith("@font-face")) rules.push(cssText);
+      }
+    }
+    return rules;
+  }
+
+  async function buildInlinedFontCss() {
+    const ruleTexts = collectFontFaceRuleTexts();
+    if (ruleTexts.length === 0) return null;
+
+    const resolved = ruleTexts.map((cssText) => {
+      if (!SRC_DECLARATION_RE.test(cssText)) return null;
+      const srcMatch = cssText.match(/src\s*:\s*([^;}]+)[;}]/i);
+      if (!srcMatch) return null;
+      const url = extractFontUrl(srcMatch[1]);
+      if (!url) return null;
+      try {
+        return { cssText, url: new URL(url, document.baseURI).href };
+      } catch (_error) {
+        return null;
+      }
+    });
+
+    const dataUris = await Promise.all(
+      resolved.map((entry) => (entry ? fetchAsDataUri(entry.url) : Promise.resolve(null))),
+    );
+
+    const inlined = [];
+    let totalBytes = 0;
+    for (let index = 0; index < resolved.length; index += 1) {
+      const entry = resolved[index];
+      const dataUri = dataUris[index];
+      if (!entry || !dataUri) continue;
+      const approxBytes = dataUri.length * 0.75;
+      if (totalBytes + approxBytes > MAX_TOTAL_FONT_BYTES) break;
+      totalBytes += approxBytes;
+      inlined.push(entry.cssText.replace(SRC_DECLARATION_RE, `src: url("${dataUri}")`));
+    }
+    return inlined.length > 0 ? inlined.join("\n") : null;
+  }
+
+  function stripExternal(clone) {
+    const images = clone.querySelectorAll("img");
+    for (let index = 0; index < images.length; index += 1) {
+      const src = images[index].getAttribute("src");
+      if (src && !src.startsWith("data:")) images[index].removeAttribute("src");
+    }
+
+    const elements = clone.querySelectorAll("*");
+    for (let index = 0; index < elements.length; index += 1) {
+      const style = elements[index].style.cssText;
+      if (style && style.includes("url(")) {
+        elements[index].style.cssText = style.replace(
+          /url\(["']?(?!data:)[^)"']*["']?\)/gi,
+          "none",
+        );
       }
     }
   }
-  window.addEventListener('message',function(e){
-    if(!e.data||e.data.type!=='INLINE_EDIT_CAPTURE_REQUEST')return;
-    var scrollX=window.scrollX||window.pageXOffset||0;
-    var scrollY=window.scrollY||window.pageYOffset||0;
-    var w=window.innerWidth,h=window.innerHeight;
-    try{
-      var clone=document.documentElement.cloneNode(true);
-      var rm=clone.querySelectorAll('script,link[rel="stylesheet"],style');
-      for(var i=0;i<rm.length;i++){rm[i].remove();}
-      inlineAll(document.documentElement,clone);
-      stripExternal(clone);
-      var html=new XMLSerializer().serializeToString(clone);
-      var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'">'
-        +'<foreignObject width="100%" height="100%">'
-        +'<div xmlns="http://www.w3.org/1999/xhtml" style="width:'+w+'px;height:'+h+'px;overflow:hidden">'
-        +'<div style="transform:translate(-'+scrollX+'px,-'+scrollY+'px);transform-origin:top left">'
-        +html+'</div></div></foreignObject></svg>';
-      var svgUrl='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
-      var img=new Image();
-      img.onload=function(){
-        var c=document.createElement('canvas');c.width=w;c.height=h;
-        c.getContext('2d').drawImage(img,0,0);
-        window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:c.toDataURL('image/png'),scrollX:scrollX,scrollY:scrollY},'*');
-      };
-      img.onerror=function(){
-        window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:null,scrollX:scrollX,scrollY:scrollY},'*');
-      };
-      img.src=svgUrl;
-    }catch(err){
-      window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:null,scrollX:scrollX,scrollY:scrollY},'*');
-    }
-  });
-})();
-</script><script data-pplx-inline-edit>
-(function(){
-  if(window===window.top)return;
-  function inlineAll(orig,clone){
-    if(orig.nodeType!==1)return;
-    try{
-      var cs=getComputedStyle(orig);
-      var t='';
-      for(var i=0;i<cs.length;i++){t+=cs[i]+':'+cs.getPropertyValue(cs[i])+';';}
-      clone.style.cssText=t;
-    }catch(e){}
-    var oc=orig.children,cc=clone.children;
-    for(var j=0;j<oc.length&&j<cc.length;j++){inlineAll(oc[j],cc[j]);}
+
+  function emitScroll() {
+    scrollRaf = 0;
+    if (!scrollForwarding) return;
+    postToTrustedTop({
+      type: "INLINE_EDIT_SCROLL",
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+    });
   }
-  function stripExternal(clone){
-    var imgs=clone.querySelectorAll('img');
-    for(var i=0;i<imgs.length;i++){
-      var s=imgs[i].getAttribute('src');
-      if(s&&!s.startsWith('data:'))imgs[i].removeAttribute('src');
+
+  window.addEventListener(
+    "scroll",
+    function () {
+      if (!scrollForwarding || scrollRaf) return;
+      scrollRaf = requestAnimationFrame(emitScroll);
+    },
+    { passive: true, capture: true },
+  );
+
+  async function handleCaptureRequest(event) {
+    const requestId = event.data.requestId;
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    function postResult(dataUrl) {
+      postToTrustedTop({
+        type: "INLINE_EDIT_SCREENSHOT_RESULT",
+        requestId,
+        dataUrl,
+        scrollX,
+        scrollY,
+      });
     }
-    var all=clone.querySelectorAll('*');
-    for(var i=0;i<all.length;i++){
-      var st=all[i].style.cssText;
-      if(st&&st.indexOf('url(')>=0){
-        all[i].style.cssText=st.replace(/url\(["']?(?!data:)[^)"']*["']?\)/gi,'none');
+
+    try {
+      // Wait for any pending web fonts to resolve so both inline metrics and
+      // the @font-face inlining below see the same loaded faces.
+      if (document.fonts && document.fonts.ready) {
+        try {
+          await document.fonts.ready;
+        } catch (_error) {}
       }
+
+      const clone = document.documentElement.cloneNode(true);
+      inlineAll(document.documentElement, clone);
+
+      const removedNodes = clone.querySelectorAll("script,link[rel=\"stylesheet\"],style");
+      for (let index = 0; index < removedNodes.length; index += 1) {
+        removedNodes[index].remove();
+      }
+
+      stripExternal(clone);
+
+      // Re-embed web fonts as data-URI @font-face rules so the SVG rasterizer
+      // can resolve them — external font URLs aren't fetched during
+      // foreignObject rendering, which would otherwise force a fallback face
+      // and change text metrics.
+      const inlinedFontCss = await buildInlinedFontCss();
+      if (inlinedFontCss) {
+        const styleEl = document.createElement("style");
+        styleEl.textContent = inlinedFontCss;
+        const head = clone.querySelector("head");
+        if (head) head.appendChild(styleEl);
+        else clone.insertBefore(styleEl, clone.firstChild);
+      }
+
+      const html = new XMLSerializer().serializeToString(clone);
+      const svg =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
+        '<foreignObject width="100%" height="100%">' +
+        `<div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;overflow:hidden">` +
+        `<div style="transform:translate(-${scrollX}px,-${scrollY}px);transform-origin:top left">` +
+        html +
+        "</div></div></foreignObject></svg>";
+      const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      const image = new Image();
+      image.onload = function () {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(image, 0, 0);
+        postResult(canvas.toDataURL("image/png"));
+      };
+      image.onerror = function () {
+        postResult(null);
+      };
+      image.src = svgUrl;
+    } catch (_error) {
+      postResult(null);
     }
   }
-  window.addEventListener('message',function(e){
-    if(!e.data||e.data.type!=='INLINE_EDIT_CAPTURE_REQUEST')return;
-    var scrollX=window.scrollX||window.pageXOffset||0;
-    var scrollY=window.scrollY||window.pageYOffset||0;
-    var w=window.innerWidth,h=window.innerHeight;
-    try{
-      var clone=document.documentElement.cloneNode(true);
-      var rm=clone.querySelectorAll('script,link[rel="stylesheet"],style');
-      for(var i=0;i<rm.length;i++){rm[i].remove();}
-      inlineAll(document.documentElement,clone);
-      stripExternal(clone);
-      var html=new XMLSerializer().serializeToString(clone);
-      var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'">'
-        +'<foreignObject width="100%" height="100%">'
-        +'<div xmlns="http://www.w3.org/1999/xhtml" style="width:'+w+'px;height:'+h+'px;overflow:hidden">'
-        +'<div style="transform:translate(-'+scrollX+'px,-'+scrollY+'px);transform-origin:top left">'
-        +html+'</div></div></foreignObject></svg>';
-      var svgUrl='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
-      var img=new Image();
-      img.onload=function(){
-        var c=document.createElement('canvas');c.width=w;c.height=h;
-        c.getContext('2d').drawImage(img,0,0);
-        window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:c.toDataURL('image/png'),scrollX:scrollX,scrollY:scrollY},'*');
-      };
-      img.onerror=function(){
-        window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:null,scrollX:scrollX,scrollY:scrollY},'*');
-      };
-      img.src=svgUrl;
-    }catch(err){
-      window.parent.postMessage({type:'INLINE_EDIT_SCREENSHOT_RESULT',dataUrl:null,scrollX:scrollX,scrollY:scrollY},'*');
+
+  window.addEventListener("message", function (event) {
+    if (!event.data) return;
+    // Only accept messages from the direct parent frame. Blocks sibling /
+    // unrelated-window postMessage senders that could otherwise reach us.
+    if (event.source !== window.parent) return;
+
+    const trustedParentOrigin = getTrustedParentOrigin(event);
+    if (!trustedParentOrigin) return;
+    trustedTopOrigin = trustedParentOrigin;
+
+    if (event.data.type === "INLINE_EDIT_SCROLL_START") {
+      scrollForwarding = true;
+      emitScroll();
+      return;
     }
+
+    if (event.data.type === "INLINE_EDIT_SCROLL_STOP") {
+      scrollForwarding = false;
+      if (scrollRaf) cancelAnimationFrame(scrollRaf);
+      scrollRaf = 0;
+      return;
+    }
+
+    if (event.data.type !== "INLINE_EDIT_CAPTURE_REQUEST") return;
+
+    handleCaptureRequest(event);
   });
 })();
+
 </script></body>
 </html>
